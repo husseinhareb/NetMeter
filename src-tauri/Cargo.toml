@@ -1,11 +1,10 @@
 [package]
 name = "netmeter"
 version = "0.1.0"
-description = "A Tauri App"
+description = "Lightweight network usage monitor for Linux"
 authors = ["you"]
 edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+rust-version = "1.82"
 
 [lib]
 # The `_lib` suffix may seem redundant but it is necessary
@@ -23,11 +22,48 @@ tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# Storage. `bundled` compiles SQLite in, so NetMeter does not depend on the
+# host's libsqlite3 version. `fallible_uint` is what makes `u64` usable as a
+# column type -- without it `ToSql`/`FromSql` for u64 do not exist and every
+# call site degrades into `as i64` casts, which is how a silent sign flip
+# eventually gets in.
+rusqlite = { version = "0.40", features = ["bundled", "fallible_uint"] }
+
+# Time. chrono for calendar math, chrono-tz for a real IANA database (so DST
+# transitions are correct), iana-time-zone to discover the system zone without
+# shelling out to `timedatectl`.
+chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
+chrono-tz = { version = "0.10", features = ["serde"] }
+iana-time-zone = "0.1"
+
+# CLOCK_BOOTTIME (suspend detection), flock (single-instance guard) and
+# sigaction (flush-on-SIGTERM). All three are read-only or process-local; none
+# of them need privileges.
+libc = "0.2"
+
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+# Interface include/exclude patterns ("veth*", "docker*").
+globset = "0.4"
+
+[features]
+# Exposes FakeNetworkStatsProvider outside the crate's own tests, so an
+# integration test (or a future netmeterd test harness) can drive the engine
+# with scripted counters.
+test-support = []
+
+[dev-dependencies]
+tempfile = "3"
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]
 codegen-units = 1
 lto = true
 opt-level = 3
-panic = "abort"
 strip = true
+# NOTE: `panic = "abort"` is deliberately NOT set. The sampling loop runs each
+# tick under `catch_unwind`, so one bad tick is counted and survived rather than
+# ending monitoring silently; the flush-on-shutdown path likewise depends on
+# unwinding. With `abort` both would be dead code. Costs ~100-200 KB of binary.
