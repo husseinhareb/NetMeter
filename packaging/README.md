@@ -7,9 +7,12 @@ none of this.
     cargo build --release --manifest-path netmeterd/Cargo.toml
     sudo packaging/install-helper.sh
 
-The GUI runs the same script through `pkexec` when you enable per-application
-usage from its settings, so the escalation is one polkit prompt rather than a
-root shell. Undo it with `sudo packaging/install-helper.sh --uninstall`.
+Undo it with `sudo packaging/install-helper.sh --uninstall`.
+
+The GUI does not install the helper itself yet; it detects whether the socket
+is there and says so. Running this from the settings screen through `pkexec`,
+so the escalation is one polkit prompt rather than a terminal, waits on the
+app being packaged — there is no installed path to the script before then.
 
 ## What it grants
 
