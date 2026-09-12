@@ -1,0 +1,18 @@
+[package]
+name = "netmeterd"
+version = "0.1.0"
+edition = "2021"
+description = "Per-application network accounting helper for NetMeter"
+
+# Deliberately does not depend on the GUI crate: that one pulls in Tauri, and
+# this process must stay small enough to audit. `core`/`monitor` get factored
+# into a shared crate when persistence lands and the duplication would matter.
+[dependencies]
+libbpf-rs = "0.27"
+libc = "0.2"
+
+[build-dependencies]
+libbpf-cargo = "0.27"
+
+[profile.release]
+strip = true
