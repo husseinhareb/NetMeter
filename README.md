@@ -18,6 +18,8 @@ process concerns: clocks, paths, the single-instance lock, service lifecycle.
 * [docs/ACCOUNTING.md](docs/ACCOUNTING.md) — which interfaces count toward your
   usage total, and why summing them all reports ~3× reality.
 * [docs/API.md](docs/API.md) — the commands and events the frontend uses.
+* [docs/PER_APP.md](docs/PER_APP.md) — design for per-application usage, why it
+  needs a privileged eBPF helper, and what it can never attribute.
 
 ```sh
 cd src-tauri
