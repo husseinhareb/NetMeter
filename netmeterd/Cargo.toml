@@ -4,15 +4,36 @@ version = "0.1.0"
 edition = "2021"
 description = "Per-application network accounting helper for NetMeter"
 
-# Deliberately does not depend on the GUI crate: that one pulls in Tauri, and
-# this process must stay small enough to audit. `core`/`monitor` get factored
-# into a shared crate when persistence lands and the duplication would matter.
+[lib]
+name = "netmeterd"
+path = "src/lib.rs"
+
+[[bin]]
+name = "netmeterd"
+path = "src/main.rs"
+
 [dependencies]
 libbpf-rs = "0.27"
 libc = "0.2"
 
+# The GUI crate with its GUI switched off: `core::time` for DST-correct day
+# boundaries and `storage::database` for the pragma order and migration
+# runner. Tauri sits behind that crate's `gui` feature and is not compiled
+# into this privileged process -- `cargo tree | grep tauri` is the check.
+# The package is `netmeter`; its library target is `netmeter_lib`.
+netmeter = { path = "../src-tauri", default-features = false }
+
+rusqlite = { version = "0.40", features = ["bundled", "fallible_uint"] }
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+chrono-tz = "0.10"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
 [build-dependencies]
 libbpf-cargo = "0.27"
+
+[dev-dependencies]
+tempfile = "3"
 
 [profile.release]
 strip = true
