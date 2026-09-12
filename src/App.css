@@ -175,3 +175,12 @@ code {
   opacity: 0.5;
   cursor: default;
 }
+
+.setting input[type="number"] {
+  width: 56px;
+  padding: 2px 4px;
+  font: inherit;
+  color: var(--fg);
+  background: none;
+  border: 1px solid var(--line);
+}

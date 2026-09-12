@@ -12,6 +12,21 @@ type Live = {
   time_anomaly: boolean;
 };
 
+type InterfaceInfo = {
+  name: string;
+  kind: string;
+  present: boolean;
+  included: boolean;
+};
+
+type Config = {
+  sampling_interval_seconds: number;
+  interface_policy: "physical_only" | "manual" | "all_except";
+  included_interfaces: string[];
+  excluded_interfaces: string[];
+  [key: string]: unknown;
+};
+
 type Status = {
   state: string;
   sampling_interval_seconds: number;
@@ -189,6 +204,8 @@ export default function App() {
   const [history, setHistory] = useState<Series | null>(null);
   const [autostart, setAutostart] = useState(false);
   const [canInstall, setCanInstall] = useState(false);
+  const [config, setConfig] = useState<Config | null>(null);
+  const [known, setKnown] = useState<InterfaceInfo[]>([]);
   const [installing, setInstalling] = useState(false);
 
   useEffect(() => {
@@ -217,6 +234,8 @@ export default function App() {
 
     invoke<boolean>("get_autostart").then(setAutostart).catch(fail);
     invoke<boolean>("can_install_helper").then(setCanInstall).catch(fail);
+    invoke<Config>("get_config").then(setConfig).catch(fail);
+    invoke<InterfaceInfo[]>("get_interfaces").then(setKnown).catch(fail);
     invoke<Live>("get_live_rates").then(setLive).catch(fail);
     invoke<Status>("get_monitor_status").then(setStatus).catch(fail);
     loadToday();
@@ -265,6 +284,38 @@ export default function App() {
       clearInterval(timer);
     };
   }, [range]);
+
+  // Editing the list switches the policy to manual: ticking a box means "count
+  // exactly these", which is what `manual` is. The backend resolves the globs
+  // and hands back the interfaces it settled on.
+  function apply(next: Config) {
+    invoke<{ config: Config; included_interfaces: string[] }>("set_config", { config: next })
+      .then((applied) => {
+        setConfig(applied.config);
+        setKnown((list) =>
+          list.map((i) => ({ ...i, included: applied.included_interfaces.includes(i.name) })),
+        );
+      })
+      .catch((err) => setError(String(err)));
+  }
+
+  function toggleInterface(name: string, counted: boolean) {
+    if (!config) return;
+    const current = new Set(known.filter((i) => i.included).map((i) => i.name));
+    if (counted) current.add(name);
+    else current.delete(name);
+    apply({
+      ...config,
+      interface_policy: "manual",
+      included_interfaces: [...current],
+      excluded_interfaces: [],
+    });
+  }
+
+  function setInterval_(seconds: number) {
+    if (!config || seconds < 1 || seconds > 3600) return;
+    apply({ ...config, sampling_interval_seconds: seconds });
+  }
 
   const todayByName = new Map(
     (today?.buckets[0]?.by_interface ?? []).map((i) => [i.name, i.traffic]),
@@ -323,6 +374,56 @@ export default function App() {
       </table>
 
       <p className="note">Dimmed interfaces are recorded but not counted in the total.</p>
+
+      <h2>Settings</h2>
+
+      {config && (
+        <>
+          <p className="note">
+            Which interfaces count toward your usage total. Counting a VPN tunnel and the
+            interface carrying it counts the same bytes twice, which is why the default is
+            physical interfaces only.
+          </p>
+          <table>
+            <thead>
+              <tr>
+                <th>Counted</th>
+                <th>Interface</th>
+                <th>Kind</th>
+                <th>Present</th>
+              </tr>
+            </thead>
+            <tbody>
+              {known.map((i) => (
+                <tr key={i.name} className={i.present ? "" : "excluded"}>
+                  <td>
+                    <input
+                      type="checkbox"
+                      checked={i.included}
+                      onChange={(e) => toggleInterface(i.name, e.target.checked)}
+                    />
+                  </td>
+                  <td>{i.name}</td>
+                  <td>{i.kind}</td>
+                  <td>{i.present ? "yes" : "no"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          <label className="setting">
+            <input
+              type="number"
+              min={1}
+              max={3600}
+              value={config.sampling_interval_seconds}
+              onChange={(e) => setInterval_(Number(e.target.value))}
+            />
+            Seconds between samples. Lower reacts faster and costs more wake-ups; accuracy
+            does not depend on it, because the kernel counts the bytes either way.
+          </label>
+        </>
+      )}
 
       <label className="setting">
         <input
