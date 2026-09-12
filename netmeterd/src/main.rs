@@ -58,7 +58,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut open_object = MaybeUninit::uninit();
     let open = skel::NetmeterdSkelBuilder::default().open(&mut open_object)?;
-    let skel = open.load().map_err(|e| {
+    let skel = open.load().inspect_err(|e| {
         if e.kind() == libbpf_rs::ErrorKind::PermissionDenied {
             eprintln!(
                 "\nLoading BPF needs CAP_BPF and CAP_PERFMON, and this kernel has \
@@ -66,7 +66,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                  the system service described in docs/PER_APP.md.\n"
             );
         }
-        e
     })?;
 
 
