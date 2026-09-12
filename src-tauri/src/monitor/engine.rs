@@ -792,24 +792,25 @@ fn live_payload(
         .map(|i| i.traffic)
         .sum();
 
-    // Usage so far today from the buffer alone. The API's `get_usage_series`
-    // adds the database's share; this field is the live tile's fast path.
+    // The buffer's share of today alone. `get_usage_series` adds the
+    // database's share; publishing it here lets the UI show a number that
+    // moves between flushes without querying.
     let today_key = crate::core::time::local_date_key(config.timezone, clocks.wall_utc_ms);
-    let mut today = UsageSummary::ZERO;
+    let mut pending_today = UsageSummary::ZERO;
     {
         let pending = lock(&shared.pending);
         for (k, v) in &pending.buckets {
             if k.local_date != today_key {
                 continue;
             }
-            today.observed += *v;
+            pending_today.observed += *v;
             let kind = pending
                 .seen
                 .get(&k.interface)
                 .map(|i| i.kind)
                 .unwrap_or(InterfaceKind::Virtual);
             if config.policy.counts(&k.interface, kind) {
-                today.included += *v;
+                pending_today.included += *v;
             }
         }
     }
@@ -821,7 +822,7 @@ fn live_payload(
             .map(|d| statistics::rate(counted, d))
             .unwrap_or(DataRate::UNKNOWN),
         by_interface,
-        today,
+        pending_today,
         time_anomaly: outcome.time.is_anomalous(),
     }
 }

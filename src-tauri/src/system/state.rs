@@ -157,7 +157,7 @@ impl AppState {
                 interval_ms: None,
                 total: DataRate::UNKNOWN,
                 by_interface: Vec::new(),
-                today: UsageSummary::ZERO,
+                pending_today: UsageSummary::ZERO,
                 time_anomaly: false,
             })
     }
