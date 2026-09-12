@@ -4,7 +4,7 @@
 //! resolved to something stable at the moment it is drained.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Runtimes that run someone else's code. Reporting these is reporting
 /// nothing: three Electron apps are not one application called "electron".
@@ -54,8 +54,9 @@ const MAX_PARENTS: usize = 4;
 fn inherited_name(tgid: u32) -> Option<String> {
     let mut pid = tgid;
     for _ in 0..=MAX_PARENTS {
-        let exe = fs::read_link(format!("/proc/{pid}/exe")).ok();
-        if let Some(name) = exe.as_deref().and_then(|e| specific_name(e, &cmdline(pid))) {
+        let args = cmdline(pid);
+        let path = program_path(pid, &args);
+        if let Some(name) = path.as_deref().and_then(|e| specific_name(e, &args)) {
             return Some(name);
         }
         match parent_of(pid) {
@@ -204,9 +205,35 @@ fn snap_name(tgid: u32) -> Option<String> {
 /// The executable behind a pid, for the `apps` table. Best effort: a process
 /// that has already exited has none.
 pub fn exe_path(tgid: u32) -> Option<String> {
-    fs::read_link(format!("/proc/{tgid}/exe"))
-        .ok()
-        .map(|p| p.display().to_string())
+    program_path(tgid, &cmdline(tgid)).map(|p| p.display().to_string())
+}
+
+/// The best path we can get for a process, without asking for privileges we
+/// should not have.
+///
+/// `/proc/<pid>/exe` is gated by `PTRACE_MODE_READ`, so reading another user's
+/// is refused unless the caller holds `CAP_SYS_PTRACE` -- which this daemon
+/// deliberately does not, because that capability also grants reading any
+/// process's memory. Measured on the installed service: every lookup failed
+/// and every application was named after a *thread* (`IOCP Thread 0`,
+/// `tokio-rt-worker`), because the only thing left was the kernel's `comm`.
+///
+/// `/proc/<pid>/cmdline` is mode 444 and not ptrace-gated, and its first
+/// argument is the program path for practically everything. Same answer, no
+/// capability.
+fn program_path(pid: u32, args: &[String]) -> Option<PathBuf> {
+    path_from(fs::read_link(format!("/proc/{pid}/exe")).ok(), args)
+}
+
+/// Split out from `/proc` so the fallback itself can be tested.
+fn path_from(exe: Option<PathBuf>, args: &[String]) -> Option<PathBuf> {
+    if let Some(exe) = exe {
+        return Some(exe);
+    }
+    let argv0 = args.first()?;
+    // A login shell is "-bash", and a process can set argv[0] to anything;
+    // neither is a path, but both are still better than a thread name.
+    (!argv0.is_empty()).then(|| PathBuf::from(argv0.trim_start_matches('-')))
 }
 
 #[cfg(test)]
@@ -307,6 +334,33 @@ mod tests {
             None
         );
         assert_eq!(name("/usr/bin/node", &["node"]), None);
+    }
+
+    #[test]
+    fn a_name_survives_exe_being_unreadable() {
+        // Observed on the installed service: with only CAP_BPF and
+        // CAP_PERFMON, /proc/<pid>/exe is refused for other users' processes,
+        // so argv[0] has to carry the name.
+        let args: Vec<String> = ["/usr/lib/firefox/firefox", "-contentproc"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let path = path_from(None, &args).expect("a path from argv[0]");
+        assert_eq!(specific_name(&path, &args).as_deref(), Some("firefox"));
+    }
+
+    #[test]
+    fn a_login_shells_leading_dash_is_not_part_of_its_name() {
+        let args = vec!["-bash".to_string()];
+        let path = path_from(None, &args).expect("a path");
+        assert_eq!(path.file_name().and_then(|n| n.to_str()), Some("bash"));
+    }
+
+    #[test]
+    fn a_readable_exe_still_wins() {
+        let args = vec!["/weird/argv0".to_string()];
+        let exe = Some(PathBuf::from("/usr/bin/spotify"));
+        assert_eq!(path_from(exe, &args), Some(PathBuf::from("/usr/bin/spotify")));
     }
 
     #[test]
