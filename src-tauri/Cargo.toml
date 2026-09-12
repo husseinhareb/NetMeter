@@ -13,12 +13,19 @@ rust-version = "1.82"
 name = "netmeter_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[[bin]]
+name = "netmeter"
+path = "src/main.rs"
+required-features = ["gui"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
-tauri-plugin-opener = "2"
+# Optional so `netmeterd` can link this crate for `core::time` and `storage`
+# without compiling Tauri into a privileged process.
+tauri = { version = "2", features = [], optional = true }
+tauri-plugin-opener = { version = "2", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
@@ -49,6 +56,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 globset = "0.4"
 
 [features]
+default = ["gui"]
+
+# The Tauri layer: `api::commands`, the event sink and the app entry point.
+gui = ["dep:tauri", "dep:tauri-plugin-opener"]
+
 # Exposes FakeNetworkStatsProvider outside the crate's own tests, so an
 # integration test (or a future netmeterd test harness) can drive the engine
 # with scripted counters.

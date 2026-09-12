@@ -4,13 +4,20 @@ use crate::core::errors::StorageError;
 use rusqlite::{Connection, OpenFlags};
 use std::path::{Path, PathBuf};
 
-/// Embedded so the binary is self-contained -- no migration files to ship,
-/// no path to resolve at runtime.
-const MIGRATIONS: &[(i32, &str)] = &[(1, include_str!("../../migrations/001_init.sql"))];
+/// An ordered list of `(version, sql)`. Embedded so a binary is
+/// self-contained -- no migration files to ship, no path to resolve at
+/// runtime.
+pub type Schema = &'static [(i32, &'static str)];
 
-/// The schema version this build expects.
-pub fn target_version() -> i32 {
-    MIGRATIONS.last().map(|(v, _)| *v).unwrap_or(0)
+/// The GUI's schema: interfaces and their hourly and daily usage.
+pub const MIGRATIONS: Schema = &[(1, include_str!("../../migrations/001_init.sql"))];
+
+/// The schema version a build expects.
+///
+/// Takes the schema rather than reading a constant, because `netmeterd` keeps
+/// its per-application tables in a database of its own.
+pub fn target_version(schema: Schema) -> i32 {
+    schema.last().map(|(v, _)| *v).unwrap_or(0)
 }
 
 /// Open the writer connection, creating and migrating the database if needed.
@@ -18,7 +25,10 @@ pub fn target_version() -> i32 {
 /// Returns the connection and, if the previous file had to be quarantined, the
 /// path it was moved to -- surfaced to the user rather than silently swallowed,
 /// because it means their history was reset.
-pub fn open_writer(path: &Path) -> Result<(Connection, Option<PathBuf>), StorageError> {
+pub fn open_writer(
+    path: &Path,
+    schema: Schema,
+) -> Result<(Connection, Option<PathBuf>), StorageError> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|source| StorageError::DataDir {
             path: dir.display().to_string(),
@@ -26,7 +36,7 @@ pub fn open_writer(path: &Path) -> Result<(Connection, Option<PathBuf>), Storage
         })?;
     }
 
-    match try_open(path) {
+    match try_open(path, schema) {
         Ok(conn) => Ok((conn, None)),
         Err(e) if is_corrupt(&e) => {
             // A corrupt database is otherwise a permanent brick: the app would
@@ -39,7 +49,7 @@ pub fn open_writer(path: &Path) -> Result<(Connection, Option<PathBuf>), Storage
                 error = %e,
                 "database was unusable; moved aside and starting fresh"
             );
-            Ok((try_open(path)?, Some(backup)))
+            Ok((try_open(path, schema)?, Some(backup)))
         }
         Err(e) => Err(e),
     }
@@ -51,7 +61,7 @@ pub fn open_writer(path: &Path) -> Result<(Connection, Option<PathBuf>), Storage
 /// the error only surfaces at the first statement -- so every step that can
 /// discover corruption lives inside this one function, and the caller retries
 /// the whole thing after quarantining.
-fn try_open(path: &Path) -> Result<Connection, StorageError> {
+fn try_open(path: &Path, schema: Schema) -> Result<Connection, StorageError> {
     let mut conn = Connection::open(path).map_err(StorageError::from_sqlite)?;
     configure(&conn)?;
 
@@ -67,7 +77,7 @@ fn try_open(path: &Path) -> Result<Connection, StorageError> {
         )));
     }
 
-    migrate(&mut conn)?;
+    migrate(&mut conn, schema)?;
     Ok(conn)
 }
 
@@ -151,12 +161,12 @@ fn configure(conn: &Connection) -> Result<(), StorageError> {
 /// `user_version` rather than a migrations table: it is a single integer in the
 /// database header, costs no row, and cannot itself get out of sync with the
 /// schema it describes.
-fn migrate(conn: &mut Connection) -> Result<(), StorageError> {
+fn migrate(conn: &mut Connection, schema: Schema) -> Result<(), StorageError> {
     let current: i32 = conn
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .map_err(StorageError::from_sqlite)?;
 
-    for (version, sql) in MIGRATIONS {
+    for (version, sql) in schema {
         if *version <= current {
             continue;
         }
@@ -229,12 +239,12 @@ mod tests {
     #[test]
     fn opening_creates_the_schema_and_sets_the_version() {
         let (_d, p) = temp();
-        let (conn, quarantined) = open_writer(&p).expect("open");
+        let (conn, quarantined) = open_writer(&p, MIGRATIONS).expect("open");
         assert!(quarantined.is_none());
         let v: i32 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .expect("version");
-        assert_eq!(v, target_version());
+        assert_eq!(v, target_version(MIGRATIONS));
         for table in [
             "interfaces",
             "usage_hour",
@@ -257,7 +267,7 @@ mod tests {
     #[test]
     fn the_pragmas_that_matter_are_actually_set() {
         let (_d, p) = temp();
-        let (conn, _) = open_writer(&p).expect("open");
+        let (conn, _) = open_writer(&p, MIGRATIONS).expect("open");
         let mode: String = conn
             .query_row("PRAGMA journal_mode", [], |r| r.get(0))
             .expect("mode");
@@ -278,7 +288,7 @@ mod tests {
         // nothing, leaving the database at NONE -- so `compact()` would never
         // return a byte to the filesystem after a retention prune.
         let (_d, p) = temp();
-        let (conn, _) = open_writer(&p).expect("open");
+        let (conn, _) = open_writer(&p, MIGRATIONS).expect("open");
         let av: i64 = conn
             .query_row("PRAGMA auto_vacuum", [], |r| r.get(0))
             .expect("auto_vacuum");
@@ -289,7 +299,7 @@ mod tests {
     fn migrating_twice_is_a_no_op() {
         let (_d, p) = temp();
         {
-            let (conn, _) = open_writer(&p).expect("first open");
+            let (conn, _) = open_writer(&p, MIGRATIONS).expect("first open");
             conn.execute(
                 "INSERT INTO interfaces(name, kind, first_seen_utc_ms, last_seen_utc_ms) \
                  VALUES ('wlan0','wifi',1,1)",
@@ -297,7 +307,7 @@ mod tests {
             )
             .expect("insert");
         }
-        let (conn, quarantined) = open_writer(&p).expect("second open");
+        let (conn, quarantined) = open_writer(&p, MIGRATIONS).expect("second open");
         assert!(quarantined.is_none());
         let n: i64 = conn
             .query_row("SELECT count(*) FROM interfaces", [], |r| r.get(0))
@@ -309,21 +319,21 @@ mod tests {
     fn a_corrupt_file_is_quarantined_rather_than_bricking_the_app() {
         let (_d, p) = temp();
         std::fs::write(&p, b"this is definitely not a sqlite database").expect("write garbage");
-        let (conn, quarantined) = open_writer(&p).expect("must recover, not fail");
+        let (conn, quarantined) = open_writer(&p, MIGRATIONS).expect("must recover, not fail");
         let backup = quarantined.expect("the bad file is kept for forensics");
         assert!(backup.exists());
         // And the fresh database is usable.
         let v: i32 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .expect("version");
-        assert_eq!(v, target_version());
+        assert_eq!(v, target_version(MIGRATIONS));
     }
 
     #[test]
     fn a_missing_parent_directory_is_created() {
         let d = tempfile::tempdir().expect("tempdir");
         let p = d.path().join("nested/deeper/netmeter.db");
-        open_writer(&p).expect("must create the tree");
+        open_writer(&p, MIGRATIONS).expect("must create the tree");
         assert!(p.exists());
     }
 
@@ -332,7 +342,7 @@ mod tests {
         // The property WAL exists for, and the reason commands do not share
         // the writer's connection.
         let (_d, p) = temp();
-        let (mut writer, _) = open_writer(&p).expect("open");
+        let (mut writer, _) = open_writer(&p, MIGRATIONS).expect("open");
         let reader = open_reader(&p).expect("open reader");
 
         let tx = writer.transaction().expect("begin");
@@ -360,7 +370,7 @@ mod tests {
     #[test]
     fn a_reader_cannot_write() {
         let (_d, p) = temp();
-        open_writer(&p).expect("open");
+        open_writer(&p, MIGRATIONS).expect("open");
         let reader = open_reader(&p).expect("open reader");
         assert!(
             reader
@@ -373,7 +383,7 @@ mod tests {
     #[test]
     fn deleting_an_interface_cascades_to_its_usage() {
         let (_d, p) = temp();
-        let (conn, _) = open_writer(&p).expect("open");
+        let (conn, _) = open_writer(&p, MIGRATIONS).expect("open");
         conn.execute_batch(
             "INSERT INTO interfaces(id, name, kind, first_seen_utc_ms, last_seen_utc_ms) \
                  VALUES (1,'veth0','enslaved',1,1);

@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    netmeter_lib::run()
+    netmeter_lib::gui::run()
 }
