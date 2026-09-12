@@ -204,12 +204,37 @@ key is, in order of preference:
 1. Flatpak application id, from `/proc/<pid>/root/.flatpak-info` (readable
    because the daemon is privileged).
 2. Snap name, from the process's cgroup path.
-3. `realpath` of `/proc/<pid>/exe`.
-4. `comm` from the exec tracepoint, when the process is already gone.
+3. The first *specific* name found at the process, or up to four parents above
+   it — see below.
+4. The executable's basename, then `comm`, for a process already gone.
 
-Display name comes from a `.desktop` lookup on that key, falling back to the
-basename. Chromium's forty helper processes share one executable and therefore
-collapse into one app, which is the behaviour a user expects.
+A name is specific unless the executable is a **runtime** (electron, node,
+python, java, wine's preloaders, Steam's reaper) or a bare **version number**.
+For those the process cannot name an application, and the two cases differ:
+
+* A runtime is named by its first argument that looks like a path:
+  `/usr/lib/electron43/electron /usr/lib/obsidian/app.asar` is `obsidian`. Its
+  own *path* is not consulted — walking that named a Proton game `i386-unix`,
+  after a directory inside wine.
+* A version-numbered executable *is* the application, installed under its own
+  name, so its path is walked: `/opt/teams/2.1.269/2.1.269` is `teams`, and
+  `.../claude/versions/2.1.269` is `claude` rather than `versions`.
+* When neither yields anything the parent is asked. That is what names
+  Electron's `--type=zygote` helpers after the app they belong to, and a
+  Proton game after Steam instead of after `wine64-preloader`.
+
+Two traps found by running it against live processes, both now under test:
+
+* **`/proc/<pid>/cmdline` is not always NUL-separated.** Electron and Chrome
+  rewrite their own argv into one space-separated blob, so Obsidian's app path
+  arrived inside argument zero and was never seen.
+* **An argument is not a path just because it is not a flag.** `bash -c` puts
+  shell code there, and a process was duly named after a redirect target
+  inside its own script. An argument now needs a `/` and no whitespace.
+
+Chromium's forty helper processes share one executable and collapse into one
+app, which is the behaviour a user expects. `examples/identify.rs` prints what
+these rules make of any live pid; it is how the cases above were found.
 
 ## Schema
 
