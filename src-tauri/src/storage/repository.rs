@@ -151,7 +151,7 @@ impl SqliteRepository {
     ///
     /// Returns the repository and the path of any quarantined predecessor.
     pub fn open(path: &Path) -> Result<(Self, Option<PathBuf>), StorageError> {
-        let (conn, quarantined) = super::database::open_writer(path)?;
+        let (conn, quarantined) = super::database::open_writer(path, super::database::MIGRATIONS)?;
         let mut repo = Self {
             conn,
             path: path.to_path_buf(),
