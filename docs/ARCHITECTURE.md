@@ -224,6 +224,10 @@ NetMeter reports the window and lets the UI say so.
 
 ## 6. Becoming a systemd service
 
+> Per-application accounting needs a privileged helper and is specified
+> separately in [PER_APP.md](PER_APP.md). It is the first concrete reason for
+> `netmeterd` to exist.
+
 The engine already takes its three collaborators as traits:
 
 ```rust
