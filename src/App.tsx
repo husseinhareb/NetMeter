@@ -21,7 +21,12 @@ type Status = {
 type AppTraffic = { app: string; rx_bytes: number; tx_bytes: number };
 
 type HelperState =
-  | { state: "running"; probes_attached: number; probes_expected: number }
+  | {
+      state: "running";
+      probes_attached: number;
+      probes_expected: number;
+      started_at_utc_ms: number;
+    }
   | { state: "not_installed" }
   | { state: "unreachable"; message: string };
 
@@ -48,6 +53,14 @@ function bytes(n: number): string {
 }
 
 const perSec = (n: number | null) => (n === null ? "–" : `${bytes(n)}/s`);
+
+// True when the helper started after local midnight, so it holds only part
+// of today.
+function startedToday(startedAtMs: number): boolean {
+  const midnight = new Date();
+  midnight.setHours(0, 0, 0, 0);
+  return startedAtMs > midnight.getTime();
+}
 
 export default function App() {
   const [live, setLive] = useState<Live | null>(null);
@@ -173,6 +186,17 @@ export default function App() {
       )}
 
       {helper?.state === "unreachable" && <p className="error">{helper.message}</p>}
+
+      {/* The interface totals above cover the whole day; the helper only
+          knows what happened since it started. Saying so beats letting the
+          two numbers sit side by side looking comparable. */}
+      {helper?.state === "running" && startedToday(helper.started_at_utc_ms) && (
+        <p className="note">
+          Counting applications since{" "}
+          {new Date(helper.started_at_utc_ms).toLocaleTimeString()} — earlier traffic today
+          is in the interface totals above but not attributed below.
+        </p>
+      )}
 
       {helper?.state === "running" && helper.probes_attached < helper.probes_expected && (
         <p className="error">
