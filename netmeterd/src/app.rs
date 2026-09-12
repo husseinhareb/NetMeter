@@ -83,6 +83,12 @@ fn parent_of(pid: u32) -> Option<u32> {
 /// a bare version number, with nothing better anywhere in its path or
 /// arguments. The caller then tries the parent.
 pub fn specific_name(exe: &Path, args: &[String]) -> Option<String> {
+    // A process that re-executes itself has argv[0] "/proc/self/exe", which
+    // names nothing -- observed live as an application called "exe". Anything
+    // under /proc is a self-reference, so ask the parent instead.
+    if exe.starts_with("/proc") {
+        return None;
+    }
     let base = exe.file_name()?.to_str()?;
 
     if !is_runtime(base) && !is_version(base) {
@@ -347,6 +353,15 @@ mod tests {
             .collect();
         let path = path_from(None, &args).expect("a path from argv[0]");
         assert_eq!(specific_name(&path, &args).as_deref(), Some("firefox"));
+    }
+
+    #[test]
+    fn a_self_referencing_path_is_not_a_name() {
+        // Observed live: an application row called "exe".
+        assert_eq!(
+            specific_name(Path::new("/proc/self/exe"), &["/proc/self/exe".to_string()]),
+            None
+        );
     }
 
     #[test]
