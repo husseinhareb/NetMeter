@@ -128,6 +128,14 @@ fn snap_name(tgid: u32) -> Option<String> {
     Some(rest[..end].to_string())
 }
 
+/// The executable behind a pid, for the `apps` table. Best effort: a process
+/// that has already exited has none.
+pub fn exe_path(tgid: u32) -> Option<String> {
+    fs::read_link(format!("/proc/{tgid}/exe"))
+        .ok()
+        .map(|p| p.display().to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
