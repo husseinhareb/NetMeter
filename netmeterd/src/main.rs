@@ -91,13 +91,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     attach!("tcp_sendmsg", skel.progs.tcp_send);
     attach!("udp_sendmsg", skel.progs.udp_send);
     attach!("udpv6_sendmsg", skel.progs.udpv6_send);
-    attach!("tcp_cleanup_rbuf", skel.progs.tcp_recv);
+    attach!("tcp_recvmsg", skel.progs.tcp_recv);
     attach!("udp_recvmsg", skel.progs.udp_recv);
     attach!("udpv6_recvmsg", skel.progs.udpv6_recv);
 
     // Losing an IPv6 UDP probe costs some QUIC; losing TCP means the numbers
     // are meaningless, so that is fatal rather than a footnote.
-    for critical in ["tcp_sendmsg", "tcp_cleanup_rbuf"] {
+    for critical in ["tcp_sendmsg", "tcp_recvmsg"] {
         if failed.contains(&critical) {
             return Err(format!("{critical} did not attach; refusing to report partial totals").into());
         }
@@ -214,16 +214,29 @@ fn report(
         bytes(wire.0),
         bytes(wire.1)
     );
-    let missing = (
-        wire.0.saturating_sub(attributed.0),
-        wire.1.saturating_sub(attributed.1),
-    );
+    // Its own line: the two numbers do not fit the table's columns, and this
+    // is the figure the whole design hangs on.
+    let leg = |att: u64, w: u64| {
+        if att > w {
+            format!("{} MORE than the wire", bytes(att - w))
+        } else {
+            format!("{} ({})", bytes(w - att), share(w - att, w))
+        }
+    };
     println!(
-        "{:<28}{:>12}{:>12}",
-        "unattributed",
-        format!("{} / {}", bytes(missing.0), share(missing.0, wire.0)),
-        format!("{} / {}", bytes(missing.1), share(missing.1, wire.1))
+        "unattributed  down {}   up {}",
+        leg(attributed.0, wire.0),
+        leg(attributed.1, wire.1)
     );
+    // The alarm that would have caught a bad probe in one tick rather than
+    // three minutes of plausible-looking table: attribution can never exceed
+    // what the interfaces actually moved.
+    if attributed.0 > wire.0.saturating_mul(2) || attributed.1 > wire.1.saturating_mul(2) {
+        println!(
+            "  IMPLAUSIBLE: attributed traffic exceeds the wire total. A probe is \
+             reading the wrong value -- do not trust the table above."
+        );
+    }
     if drops.0 + drops.1 > 0 {
         println!(
             "{:<28}{:>12}{:>12}  (map full)",

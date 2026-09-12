@@ -76,46 +76,61 @@ static __always_inline void account(long bytes, int is_rx) {
         init.tx_bytes = bytes;
     bpf_get_current_comm(&init.comm, sizeof(init.comm));
 
-    if (bpf_map_update_elem(&counters, &k, &init, BPF_NOEXIST))
-        note_drop(is_rx ? 0 : 1, bytes);
+    if (bpf_map_update_elem(&counters, &k, &init, BPF_NOEXIST)) {
+        // Either the map is full, or another CPU created this key between our
+        // lookup and here. Try once more before calling the bytes lost.
+        v = bpf_map_lookup_elem(&counters, &k);
+        if (v) {
+            if (is_rx)
+                __sync_fetch_and_add(&v->rx_bytes, bytes);
+            else
+                __sync_fetch_and_add(&v->tx_bytes, bytes);
+        } else {
+            note_drop(is_rx ? 0 : 1, bytes);
+        }
+    }
 }
 
 // Send: the return value is the number of bytes accepted.
 SEC("fexit/tcp_sendmsg")
-int BPF_PROG(tcp_send, void *sk, void *msg, __u64 size, long ret) {
+int BPF_PROG(tcp_send, void *sk, void *msg, __u64 size, int ret) {
     account(ret, 0);
     return 0;
 }
 
 SEC("fexit/udp_sendmsg")
-int BPF_PROG(udp_send, void *sk, void *msg, __u64 len, long ret) {
+int BPF_PROG(udp_send, void *sk, void *msg, __u64 len, int ret) {
     account(ret, 0);
     return 0;
 }
 
 SEC("fexit/udpv6_sendmsg")
-int BPF_PROG(udpv6_send, void *sk, void *msg, __u64 len, long ret) {
+int BPF_PROG(udpv6_send, void *sk, void *msg, __u64 len, int ret) {
     account(ret, 0);
     return 0;
 }
 
-// Receive: tcp_cleanup_rbuf carries the bytes copied to userspace and fires on
-// the splice path as well as recvmsg. It is called more than once per receive,
-// so the count must come from `copied`, never from the number of calls.
-SEC("fentry/tcp_cleanup_rbuf")
-int BPF_PROG(tcp_recv, void *sk, int copied) {
-    account(copied, 1);
+// Receive: the return value is the bytes copied by this one call.
+//
+// tcp_cleanup_rbuf was measured first and rejected. It fires more than once
+// per recvmsg -- 2498 calls for 1504 receives -- and its `copied` argument is
+// that call's running total, not each fragment, so summing it inflates
+// download quadratically. The cost of using tcp_recvmsg instead is the splice
+// receive path, which lands in the unattributed remainder.
+SEC("fexit/tcp_recvmsg")
+int BPF_PROG(tcp_recv, void *sk, void *msg, __u64 len, int flags, int ret) {
+    account(ret, 1);
     return 0;
 }
 
 SEC("fexit/udp_recvmsg")
-int BPF_PROG(udp_recv, void *sk, void *msg, __u64 len, int flags, long ret) {
+int BPF_PROG(udp_recv, void *sk, void *msg, __u64 len, int flags, int ret) {
     account(ret, 1);
     return 0;
 }
 
 SEC("fexit/udpv6_recvmsg")
-int BPF_PROG(udpv6_recv, void *sk, void *msg, __u64 len, int flags, long ret) {
+int BPF_PROG(udpv6_recv, void *sk, void *msg, __u64 len, int flags, int ret) {
     account(ret, 1);
     return 0;
 }
