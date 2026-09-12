@@ -49,7 +49,11 @@ install -m 0755 "$BINARY" "$LIBDIR/netmeterd"
 install -m 0644 "$HERE/netmeterd.service" "$UNIT"
 
 systemctl daemon-reload
-systemctl enable --now netmeterd.service
+systemctl enable netmeterd.service
+# restart, not `enable --now`: on a machine where the service is already
+# running, `--now` leaves the old binary in place and the upgrade does
+# nothing at all.
+systemctl restart netmeterd.service
 
 echo
 echo "Installed. Check it with:"

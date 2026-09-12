@@ -12,6 +12,13 @@ RestartSec=5
 
 # The only privileges it has, and the only ones it needs: load a BPF program
 # and read the kernel's own counters. No setuid binary, no root shell.
+#
+# CAP_SYS_PTRACE is deliberately absent, which is why the daemon identifies
+# applications from /proc/<pid>/cmdline rather than /proc/<pid>/exe: reading
+# another user's exe link requires it, and it would also grant reading any
+# process's memory. That is far too much for a traffic meter. The cost is
+# that a Flatpak's application id cannot be read either, so Flatpak apps are
+# named after their binary.
 AmbientCapabilities=CAP_BPF CAP_PERFMON
 CapabilityBoundingSet=CAP_BPF CAP_PERFMON
 NoNewPrivileges=yes
