@@ -74,7 +74,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     init_logging();
     let timezone = time::system_timezone();
 
-    let (mut store, quarantined) = Store::open(&db_path)?;
+    let (mut store, quarantined) = Store::open(&db_path).inspect_err(|e| {
+        if is_permission_denied(e) {
+            eprintln!(
+                "\nCannot open {}: permission denied.\nAs a system service this path \
+                 is created by systemd's StateDirectory=netmeter. To try it by hand, \
+                 point it somewhere writable:\n\n    \
+                 sudo env NETMETERD_DB=/tmp/netmeter-apps.db {} 5\n",
+                db_path.display(),
+                std::env::args().next().unwrap_or_default()
+            );
+        }
+    })?;
     if let Some(path) = quarantined {
         tracing::error!(path = %path.display(), "previous database was unreadable and was moved aside");
     }
@@ -247,6 +258,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 read_drops(&skel.maps.dropped),
             );
         }
+    }
+}
+
+/// Both the data directory and the database file itself can be refused, and
+/// the two arrive as different variants.
+fn is_permission_denied(e: &netmeter_lib::core::errors::StorageError) -> bool {
+    use netmeter_lib::core::errors::StorageError;
+    match e {
+        StorageError::DataDir { source, .. } => {
+            source.kind() == std::io::ErrorKind::PermissionDenied
+        }
+        StorageError::Sqlite(rusqlite::Error::SqliteFailure(f, _)) => {
+            f.code == rusqlite::ErrorCode::CannotOpen
+        }
+        _ => false,
     }
 }
 
