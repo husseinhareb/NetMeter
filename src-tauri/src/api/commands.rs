@@ -368,6 +368,19 @@ pub async fn get_app_usage(
         })
 }
 
+/// Whether NetMeter starts with the desktop session.
+#[tauri::command]
+pub async fn get_autostart() -> bool {
+    crate::system::autostart::is_enabled()
+}
+
+/// Turn starting at login on or off.
+#[tauri::command]
+pub async fn set_autostart(enabled: bool) -> Result<bool> {
+    crate::system::autostart::set_enabled(enabled)?;
+    Ok(crate::system::autostart::is_enabled())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

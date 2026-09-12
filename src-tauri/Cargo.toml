@@ -24,7 +24,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 # Optional so `netmeterd` can link this crate for `core::time` and `storage`
 # without compiling Tauri into a privileged process.
-tauri = { version = "2", features = [], optional = true }
+tauri = { version = "2", features = ["tray-icon"], optional = true }
 tauri-plugin-opener = { version = "2", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

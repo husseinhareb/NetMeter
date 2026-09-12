@@ -187,6 +187,7 @@ export default function App() {
   const [apps, setApps] = useState<AppUsage | null>(null);
   const [range, setRange] = useState<Range>(() => ranges()[0]);
   const [history, setHistory] = useState<Series | null>(null);
+  const [autostart, setAutostart] = useState(false);
 
   useEffect(() => {
     const fail = (e: unknown) =>
@@ -212,6 +213,7 @@ export default function App() {
           .catch(() => setApps(null));
       });
 
+    invoke<boolean>("get_autostart").then(setAutostart).catch(fail);
     invoke<Live>("get_live_rates").then(setLive).catch(fail);
     invoke<Status>("get_monitor_status").then(setStatus).catch(fail);
     loadToday();
@@ -318,6 +320,20 @@ export default function App() {
       </table>
 
       <p className="note">Dimmed interfaces are recorded but not counted in the total.</p>
+
+      <label className="setting">
+        <input
+          type="checkbox"
+          checked={autostart}
+          onChange={(e) =>
+            invoke<boolean>("set_autostart", { enabled: e.target.checked })
+              .then(setAutostart)
+              .catch((err) => setError(String(err)))
+          }
+        />
+        Start at login. Closing the window leaves NetMeter counting in the tray; only Quit
+        from the tray menu stops it.
+      </label>
 
       <h2>History</h2>
 

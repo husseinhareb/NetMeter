@@ -9,6 +9,8 @@ use crate::api::events::{names, EventSink, InterfaceChanged, LiveUsage};
 use crate::core::types::MonitorStatus;
 use crate::init_logging;
 use crate::system::state::{AppState, DynSink};
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::TrayIconBuilder;
 use tauri::{Emitter, Manager};
 
 /// Publishes engine events to the webview.
@@ -123,7 +125,17 @@ pub fn run() {
             }
 
             app.manage(state);
-            install_signal_handlers(handle);
+            install_signal_handlers(handle.clone());
+            build_tray(app.handle())?;
+
+            // `--hidden` is what the autostart entry passes: start counting,
+            // show nothing. The window is created hidden either way so there
+            // is no flash before it is closed again.
+            if !std::env::args().any(|a| a == "--hidden") {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                }
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -139,7 +151,18 @@ pub fn run() {
             crate::api::commands::set_config,
             crate::api::commands::get_helper_state,
             crate::api::commands::get_app_usage,
+            crate::api::commands::get_autostart,
+            crate::api::commands::set_autostart,
         ])
+        .on_window_event(|window, event| {
+            // Hide rather than close: the engine lives in this process, and
+            // the user pressing X means "get out of my way", not "stop
+            // measuring". Quit is on the tray menu.
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+            }
+        })
         .build(tauri::generate_context!())
         .expect("error while building the NetMeter application")
         .run(|app, event| {
@@ -152,4 +175,47 @@ pub fn run() {
                 tracing::info!("NetMeter stopped");
             }
         });
+}
+
+/// The tray icon, its menu, and the rule that closing the window does not stop
+/// monitoring.
+fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
+    let show = MenuItem::with_id(app, "show", "Show NetMeter", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&show, &quit])?;
+
+    TrayIconBuilder::with_id("main")
+        .icon(app.default_window_icon().cloned().ok_or_else(|| {
+            tauri::Error::AssetNotFound("no window icon to use for the tray".into())
+        })?)
+        .tooltip("NetMeter")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "show" => reveal(app),
+            // The only way out. Closing the window hides it instead, because a
+            // meter that stops when its window closes misses the day.
+            "quit" => app.exit(0),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let tauri::tray::TrayIconEvent::Click {
+                button: tauri::tray::MouseButton::Left,
+                button_state: tauri::tray::MouseButtonState::Up,
+                ..
+            } = event
+            {
+                reveal(tray.app_handle());
+            }
+        })
+        .build(app)?;
+    Ok(())
+}
+
+fn reveal(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
 }

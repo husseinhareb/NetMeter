@@ -1,5 +1,6 @@
 //! Process-level concerns: clocks, paths, locking, and the service lifecycle.
 pub mod lifecycle;
+pub mod autostart;
 pub mod paths;
 pub mod power;
 pub mod state;

@@ -148,3 +148,16 @@ code {
   background: var(--fg);
   opacity: 0.65;
 }
+
+.setting {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 14px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.setting input {
+  margin: 2px 0 0;
+}
