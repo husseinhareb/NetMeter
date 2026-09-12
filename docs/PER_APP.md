@@ -165,6 +165,37 @@ The syscall layer no longer appears on this list: `write`, `send`, `sendmsg`,
 `sendfile`, `splice` and io_uring were all measured to funnel through the
 protocol operations above.
 
+## Measured: how much can actually be attributed
+
+Two minutes of ordinary desktop use, kernel 7.2.4, 2026-09-12:
+
+| | On the wire | Attributed | Remainder |
+|---|---|---|---|
+| Download | 23.0 MiB | 21.4 MiB | **7.3%**, steady |
+| Upload | 1.4 MiB | 1.0 MiB | **30%**, falling from 78% |
+
+The download remainder is header overhead and behaves like it: ~15,500
+segments at 52-66 bytes of TCP/IP/Ethernet each accounts for about 1.0 MB of
+the 1.7 MiB gap, with DNS, ARP, IPv6 router advertisements, retransmits and the
+splice receive path making up the rest. It does not drift.
+
+**The upload remainder is mostly acknowledgements for the download**, which is
+why it starts near 78% and falls as real upload accumulates. Downloading
+21 MiB produces roughly 7,700 delayed ACKs at ~66 bytes on the wire -- about
+500 KB, against the ~440 KB observed. Those bytes have no process behind them;
+no accounting mechanism at any layer can attribute them to an application.
+
+Two consequences for the UI, both now measured rather than guessed:
+
+* The remainder row is not a rounding error to hide. On an upload-light
+  session it is a third of the upstream total, and a user who sees per-app
+  numbers summing to 70% of their upstream needs the reason named, not
+  smoothed away. Call it *protocol overhead*, since that is what it was
+  measured to be.
+* Per-application figures are payload. They should never be presented as the
+  number a data cap is measured against; the interface total stays the
+  headline, exactly as the first section of this document requires.
+
 ## App identity
 
 A pid is useless as a historical key — they recycle within hours. The stored
@@ -253,8 +284,13 @@ The daemon is a second binary in the same Cargo workspace, sharing `core` and
 1. ~~A probe for the attach points and their overhead.~~ Done, 2026-09-12;
    it moved the probe set from the socket layer to the protocol layer and
    found the overhead immaterial.
-2. `netmeterd` with the BPF program and in-memory counters, no persistence,
-   printing to stdout. Verifiable against `nethogs` by hand, and against
-   `/proc/net/dev` for the size of the unattributed remainder.
+2. ~~`netmeterd` with the BPF program and in-memory counters.~~ Done,
+   2026-09-12. Two bugs worth remembering: declaring an `int`-returning
+   kernel function's return value as `long` in `BPF_PROG` reads the register's
+   undefined upper half, which showed up as totals inflated by exact multiples
+   of 2^32; and `tcp_cleanup_rbuf` passes a per-call *running total*, so
+   summing it squares the download figure. Both produced confident,
+   well-formatted, wildly wrong tables, which is why the daemon now refuses to
+   trust itself when attribution exceeds the wire total.
 3. Persistence and retention.
 4. The socket, then the GUI view.
