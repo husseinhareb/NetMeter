@@ -38,8 +38,10 @@ pub struct LiveUsage {
     /// Rate across the interfaces the policy counts.
     pub total: DataRate,
     pub by_interface: Vec<InterfaceRate>,
-    /// Usage so far in the current local day, including bytes not yet flushed.
-    pub today: UsageSummary,
+    /// Today's traffic that is still only in memory, not yet flushed to the
+    /// database. It resets at every flush, so it is *not* the day's total --
+    /// ask `get_today_usage` for that, which adds this in already.
+    pub pending_today: UsageSummary,
     /// The clocks disagreed on this sample: the byte counts are good, the
     /// timing is not.
     pub time_anomaly: bool,
@@ -110,7 +112,7 @@ mod tests {
             interval_ms: None,
             total: DataRate::UNKNOWN,
             by_interface: vec![],
-            today: UsageSummary::ZERO,
+            pending_today: UsageSummary::ZERO,
             time_anomaly: false,
         });
         s.interface_added(&InterfaceChanged {
@@ -135,7 +137,7 @@ mod tests {
                 traffic: Traffic::new(10, 20),
                 included: true,
             }],
-            today: UsageSummary::ZERO,
+            pending_today: UsageSummary::ZERO,
             time_anomaly: false,
         };
         let s = serde_json::to_string(&p).expect("serializes");

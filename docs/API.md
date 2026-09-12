@@ -116,6 +116,22 @@ already permits this.
 `network-usage-updated` carries exactly what `get_live_rates()` returns, so
 there is one parser and one code path whether you poll or subscribe.
 
+```ts
+// LiveUsage
+{
+  sampled_at_utc_ms, interval_ms,          // number | null for the interval
+  total: DataRate,                         // rate across counted interfaces
+  by_interface: [{ name, rate, traffic, included }],
+  pending_today: { included, observed },   // NOT the day's total -- see below
+  time_anomaly: boolean,                   // byte counts good, timing is not
+}
+```
+
+**`pending_today` is not today's total.** It is only what is still in memory
+awaiting a flush, so it drops back to zero every flush interval. The headline
+"today" figure is `get_today_usage().total.included`, which already adds the
+pending bytes to the database's.
+
 ## `MonitorStatus`
 
 ```ts
