@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- NetMeter.
+       Drawn for 22px first: at tray size the unused half of a dial and a thin
+       needle merge into a blob, so there is one arc and one heavy needle, both
+       with a wide gap between them. -->
+  <rect width="1024" height="1024" rx="224" fill="#0F172A"/>
+
+  <!-- Three quarters of a dial, left-opening, so the shape is asymmetric and
+       recognisable even when it is twenty pixels wide. -->
+  <path d="M 232 700 A 340 340 0 1 1 792 700"
+        fill="none" stroke="#38BDF8" stroke-width="116" stroke-linecap="round"/>
+
+  <!-- Needle, kept short so it never touches the arc. -->
+  <line x1="512" y1="620" x2="512" y2="396"
+        stroke="#F8FAFC" stroke-width="96" stroke-linecap="round"
+        transform="rotate(-38 512 620)"/>
+  <circle cx="512" cy="620" r="74" fill="#0F172A"/>
+</svg>
