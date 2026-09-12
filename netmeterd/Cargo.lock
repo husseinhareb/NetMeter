@@ -1175,6 +1175,8 @@ dependencies = [
  "libc",
  "netmeter",
  "rusqlite",
+ "serde",
+ "serde_json",
  "tempfile",
  "tracing",
  "tracing-subscriber",

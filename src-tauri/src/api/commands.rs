@@ -331,6 +331,43 @@ pub async fn set_config(state: State<'_, AppState>, config: Config) -> Result<Co
     state.set_config(config)
 }
 
+/// Whether the per-application helper is installed and running.
+///
+/// Absence is a normal answer, not an error: the helper is opt-in, and the
+/// rest of NetMeter works without it.
+#[tauri::command]
+pub async fn get_helper_state() -> crate::api::helper::HelperState {
+    tauri::async_runtime::spawn_blocking(crate::api::helper::state)
+        .await
+        .unwrap_or_else(|e| crate::api::helper::HelperState::Unreachable {
+            message: format!("helper query failed: {e}"),
+        })
+}
+
+/// Per-application usage, from the helper rather than the local database.
+///
+/// The frontend never opens the helper's socket itself, for the same reason it
+/// never opens SQLite itself.
+#[tauri::command]
+pub async fn get_app_usage(
+    granularity: Granularity,
+    from: String,
+    to: String,
+) -> std::result::Result<crate::api::ipc::AppUsage, crate::api::helper::HelperError> {
+    // Blocking socket IO on its own thread: a slow or wedged helper must not
+    // stall the async runtime the rest of the commands share.
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::api::helper::app_usage(granularity, from, to)
+    })
+        .await
+        .unwrap_or_else(|e| {
+            Err(crate::api::helper::HelperError {
+                kind: "internal".into(),
+                message: format!("helper query failed: {e}"),
+            })
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -2,4 +2,6 @@
 //! loading BPF or needing privileges.
 
 pub mod app;
+pub mod query;
+pub mod server;
 pub mod store;
