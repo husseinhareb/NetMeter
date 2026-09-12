@@ -38,8 +38,20 @@ type AppUsage = {
 
 type Series = {
   total: { included: Traffic; observed: Traffic };
-  buckets: { by_interface: { name: string; traffic: Traffic; included: boolean }[] }[];
+  buckets: {
+    key: string;
+    start_utc_ms: number;
+    summary: { included: Traffic; observed: Traffic };
+    by_interface: { name: string; traffic: Traffic; included: boolean }[];
+  }[];
+  offline_total: { included: Traffic; observed: Traffic };
+  offline_windows: { from_utc_ms: number; to_utc_ms: number }[];
+  data_since: string | null;
 };
+
+type Granularity = "hour" | "day" | "month" | "year";
+
+type Range = { label: string; granularity: Granularity; from: string; to: string };
 
 const UNITS = ["B", "KiB", "MiB", "GiB", "TiB"];
 
@@ -54,12 +66,113 @@ function bytes(n: number): string {
 
 const perSec = (n: number | null) => (n === null ? "–" : `${bytes(n)}/s`);
 
+// Calendar keys are built from a local Date so day arithmetic crosses DST the
+// way the calendar does. Which buckets those keys actually cover is the
+// backend's decision, not this file's.
+const pad = (n: number) => String(n).padStart(2, "0");
+const dayKey = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const monthKey = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
+
+function daysAgo(n: number): Date {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return d;
+}
+
+function ranges(): Range[] {
+  const today = new Date();
+  return [
+    { label: "Today", granularity: "hour", from: dayKey(today), to: dayKey(today) },
+    { label: "Yesterday", granularity: "hour", from: dayKey(daysAgo(1)), to: dayKey(daysAgo(1)) },
+    { label: "7 days", granularity: "day", from: dayKey(daysAgo(6)), to: dayKey(today) },
+    { label: "30 days", granularity: "day", from: dayKey(daysAgo(29)), to: dayKey(today) },
+    { label: "This month", granularity: "day", from: monthKey(today), to: monthKey(today) },
+    {
+      label: "This year",
+      granularity: "month",
+      from: String(today.getFullYear()),
+      to: String(today.getFullYear()),
+    },
+  ];
+}
+
+// Hour keys come back as "2026-09-12T14"; nothing else needs shortening.
+function bucketLabel(key: string): string {
+  if (key.includes("T")) return `${key.slice(11)}:00`;
+  return key;
+}
+
+function span(from: number, to: number): string {
+  const f = new Date(from);
+  const t = new Date(to);
+  return `${f.toLocaleString()} – ${t.toLocaleString()}`;
+}
+
 // True when the helper started after local midnight, so it holds only part
 // of today.
 function startedToday(startedAtMs: number): boolean {
   const midnight = new Date();
   midnight.setHours(0, 0, 0, 0);
   return startedAtMs > midnight.getTime();
+}
+
+function HistoryTable({ series }: { series: Series }) {
+  const peak = Math.max(
+    1,
+    ...series.buckets.map((b) => b.summary.included.rx_bytes + b.summary.included.tx_bytes),
+  );
+  const offline = series.offline_total.included;
+  const hasOffline = offline.rx_bytes > 0 || offline.tx_bytes > 0;
+
+  return (
+    <>
+      <dl>
+        <dt>Total</dt>
+        <dd>
+          down <span className="down">{bytes(series.total.included.rx_bytes)}</span>
+          up <span className="up">{bytes(series.total.included.tx_bytes)}</span>
+        </dd>
+      </dl>
+
+      <table>
+        <tbody>
+          {series.buckets.map((b) => {
+            const total = b.summary.included.rx_bytes + b.summary.included.tx_bytes;
+            // Before NetMeter held any data, a zero is absence rather than an
+            // idle period, and it is drawn as neither.
+            const unknown = series.data_since !== null && b.key.slice(0, 10) < series.data_since;
+            return (
+              <tr key={b.key} className={unknown ? "excluded" : ""}>
+                <td className="bucket">{bucketLabel(b.key)}</td>
+                <td className="barcell">
+                  {!unknown && (
+                    <span className="bar" style={{ width: `${(100 * total) / peak}%` }} />
+                  )}
+                </td>
+                <td>{unknown ? "no data" : bytes(b.summary.included.rx_bytes)}</td>
+                <td>{unknown ? "" : bytes(b.summary.included.tx_bytes)}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+
+      {/* Real bytes the kernel counted while nothing was watching. They
+          belong to no bucket, so they are reported rather than spread. */}
+      {hasOffline && (
+        <p className="note">
+          {bytes(offline.rx_bytes)} down and {bytes(offline.tx_bytes)} up moved while NetMeter
+          was not running
+          {series.offline_windows.length > 0 &&
+            ` (${span(
+              series.offline_windows[0].from_utc_ms,
+              series.offline_windows[series.offline_windows.length - 1].to_utc_ms,
+            )})`}
+          , and is not placed in any bar above.
+        </p>
+      )}
+    </>
+  );
 }
 
 export default function App() {
@@ -69,6 +182,8 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [helper, setHelper] = useState<HelperState | null>(null);
   const [apps, setApps] = useState<AppUsage | null>(null);
+  const [range, setRange] = useState<Range>(() => ranges()[0]);
+  const [history, setHistory] = useState<Series | null>(null);
 
   useEffect(() => {
     const fail = (e: unknown) =>
@@ -116,6 +231,25 @@ export default function App() {
       subs.forEach((s) => s.then((off) => off()));
     };
   }, []);
+
+  useEffect(() => {
+    let live = true;
+    invoke<Series>("get_usage_series", {
+      query: {
+        granularity: range.granularity,
+        from: range.from,
+        to: range.to,
+        scope: "included",
+        include_breakdown: false,
+      },
+    })
+      .then((s) => live && setHistory(s))
+      .catch(() => live && setHistory(null));
+    // A range change mid-flight must not let the old answer overwrite the new.
+    return () => {
+      live = false;
+    };
+  }, [range]);
 
   const todayByName = new Map(
     (today?.buckets[0]?.by_interface ?? []).map((i) => [i.name, i.traffic]),
@@ -174,6 +308,22 @@ export default function App() {
       </table>
 
       <p className="note">Dimmed interfaces are recorded but not counted in the total.</p>
+
+      <h2>History</h2>
+
+      <div className="tabs">
+        {ranges().map((r) => (
+          <button
+            key={r.label}
+            className={r.label === range.label ? "on" : ""}
+            onClick={() => setRange(r)}
+          >
+            {r.label}
+          </button>
+        ))}
+      </div>
+
+      {history && <HistoryTable series={history} />}
 
       <h2>By application, today</h2>
 

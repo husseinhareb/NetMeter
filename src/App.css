@@ -109,3 +109,42 @@ h2 {
 code {
   font-size: 12px;
 }
+
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 14px;
+}
+
+.tabs button {
+  padding: 3px 9px;
+  font: inherit;
+  color: var(--fg);
+  background: none;
+  border: 1px solid var(--line);
+  cursor: pointer;
+}
+
+.tabs button.on {
+  border-color: var(--fg);
+  font-weight: 600;
+}
+
+.bucket {
+  white-space: nowrap;
+}
+
+.barcell {
+  width: 55%;
+  padding-left: 12px;
+  padding-right: 12px;
+}
+
+.bar {
+  display: block;
+  height: 9px;
+  min-width: 1px;
+  background: var(--fg);
+  opacity: 0.65;
+}
