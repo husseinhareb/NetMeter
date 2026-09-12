@@ -18,6 +18,19 @@ type Status = {
   degraded_reason: string | null;
 };
 
+type AppTraffic = { app: string; rx_bytes: number; tx_bytes: number };
+
+type HelperState =
+  | { state: "running"; probes_attached: number; probes_expected: number }
+  | { state: "not_installed" }
+  | { state: "unreachable"; message: string };
+
+type AppUsage = {
+  total: AppTraffic[];
+  overhead: Traffic;
+  uid: number;
+};
+
 type Series = {
   total: { included: Traffic; observed: Traffic };
   buckets: { by_interface: { name: string; traffic: Traffic; included: boolean }[] }[];
@@ -41,6 +54,8 @@ export default function App() {
   const [status, setStatus] = useState<Status | null>(null);
   const [today, setToday] = useState<Series | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [helper, setHelper] = useState<HelperState | null>(null);
+  const [apps, setApps] = useState<AppUsage | null>(null);
 
   useEffect(() => {
     const fail = (e: unknown) =>
@@ -48,14 +63,36 @@ export default function App() {
 
     const loadToday = () => invoke<Series>("get_today_usage").then(setToday).catch(fail);
 
+    // Per-application data comes from the privileged helper, which is
+    // optional. Its absence is a normal state, not an error to report.
+    const loadApps = () =>
+      invoke<HelperState>("get_helper_state").then((h) => {
+        setHelper(h);
+        if (h.state !== "running") {
+          setApps(null);
+          return;
+        }
+        const day = new Date();
+        const key = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(
+          day.getDate(),
+        ).padStart(2, "0")}`;
+        invoke<AppUsage>("get_app_usage", { granularity: "day", from: key, to: key })
+          .then(setApps)
+          .catch(() => setApps(null));
+      });
+
     invoke<Live>("get_live_rates").then(setLive).catch(fail);
     invoke<Status>("get_monitor_status").then(setStatus).catch(fail);
     loadToday();
+    loadApps();
 
     // The day's totals come from the backend, which is the only place that
     // knows the database's share as well as the unflushed buffer's. Rates
     // arrive on the event, once a second.
-    const timer = setInterval(loadToday, 15000);
+    const timer = setInterval(() => {
+      loadToday();
+      loadApps();
+    }, 15000);
     const subs = [
       listen<Live>("network-usage-updated", (e) => setLive(e.payload)),
       listen<Status>("monitor-status-changed", (e) => setStatus(e.payload)),
@@ -124,6 +161,57 @@ export default function App() {
       </table>
 
       <p className="note">Dimmed interfaces are recorded but not counted in the total.</p>
+
+      <h2>By application, today</h2>
+
+      {helper?.state === "not_installed" && (
+        <p className="note">
+          Per-application usage needs the <code>netmeterd</code> helper, which runs as a
+          system service because the kernel does not expose per-process byte counts to
+          an unprivileged program. See <code>docs/PER_APP.md</code>.
+        </p>
+      )}
+
+      {helper?.state === "unreachable" && <p className="error">{helper.message}</p>}
+
+      {helper?.state === "running" && helper.probes_attached < helper.probes_expected && (
+        <p className="error">
+          Only {helper.probes_attached} of {helper.probes_expected} probes attached, so some
+          traffic is not counted below.
+        </p>
+      )}
+
+      {apps && (
+        <table>
+          <thead>
+            <tr>
+              <th>Application</th>
+              <th>Down</th>
+              <th>Up</th>
+            </tr>
+          </thead>
+          <tbody>
+            {apps.total.map((a) => (
+              <tr key={a.app}>
+                <td>{a.app}</td>
+                <td>{bytes(a.rx_bytes)}</td>
+                <td>{bytes(a.tx_bytes)}</td>
+              </tr>
+            ))}
+            {/* Its own row, not hidden: payload bytes never sum to what the
+                interfaces moved, and the difference is headers and acks. */}
+            <tr className="excluded">
+              <td>protocol overhead</td>
+              <td>{bytes(apps.overhead.rx_bytes)}</td>
+              <td>{bytes(apps.overhead.tx_bytes)}</td>
+            </tr>
+          </tbody>
+        </table>
+      )}
+
+      {apps?.total.length === 0 && (
+        <p className="note">Nothing recorded yet — the helper flushes every 30 seconds.</p>
+      )}
     </main>
   );
 }

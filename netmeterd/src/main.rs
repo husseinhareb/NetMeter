@@ -9,7 +9,10 @@
 mod app;
 mod interfaces;
 
+use netmeter_lib::api::ipc::{self, DaemonStatus};
+use netmeterd::server::Server;
 use netmeterd::store::{Batch, BucketKey, Retention, Store};
+use std::sync::{Arc, Mutex};
 
 mod skel {
     #![allow(clippy::all, dead_code, non_snake_case, non_camel_case_types)]
@@ -138,6 +141,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "sampling"
     );
 
+    // Published over the socket so the GUI can tell "no data yet" from "the
+    // helper is not running" from "running, but two probes did not attach".
+    let status = Arc::new(Mutex::new(DaemonStatus {
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        probes_attached: links.len(),
+        probes_expected: ipc::PROBES_EXPECTED,
+        started_at_utc_ms: time::now_utc_ms(),
+        last_flush_utc_ms: None,
+        dropped: Default::default(),
+    }));
+
+    let socket_path = std::env::var_os("NETMETERD_SOCKET")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(ipc::SOCKET_PATH));
+    {
+        let server = Server::new(
+            socket_path,
+            db_path.clone(),
+            timezone,
+            Arc::clone(&status),
+        );
+        // Its own thread with its own read-only connections, so a slow client
+        // can never delay a sample.
+        std::thread::spawn(move || {
+            if let Err(e) = server.run() {
+                tracing::error!(error = %e, "socket server stopped");
+            }
+        });
+    }
+
     let tty = unsafe { libc::isatty(1) } == 1;
     let (mut last_rx, mut last_tx) = interfaces::physical_totals();
     let mut batch = Batch::default();
@@ -239,6 +272,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             batch = Batch::default();
             last_flush = Instant::now();
             tracing::debug!(rows, "flushed");
+
+            let dropped = read_drops(&skel.maps.dropped);
+            if let Ok(mut s) = status.lock() {
+                s.last_flush_utc_ms = Some(now);
+                s.dropped = ipc::Traffic {
+                    rx_bytes: dropped.0,
+                    tx_bytes: dropped.1,
+                };
+            }
 
             if last_prune_date.as_deref() != Some(local_date.as_str()) {
                 store.prune(Retention::default(), timezone, now)?;

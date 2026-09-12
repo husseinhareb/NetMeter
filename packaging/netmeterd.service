@@ -1,0 +1,50 @@
+[Unit]
+Description=NetMeter per-application network accounting
+Documentation=file:///usr/share/doc/netmeter/PER_APP.md
+# Counting starts when the network does, not when a user logs in.
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/netmeter/netmeterd
+Restart=on-failure
+RestartSec=5
+
+# The only privileges it has, and the only ones it needs: load a BPF program
+# and read the kernel's own counters. No setuid binary, no root shell.
+AmbientCapabilities=CAP_BPF CAP_PERFMON
+CapabilityBoundingSet=CAP_BPF CAP_PERFMON
+NoNewPrivileges=yes
+
+# /var/lib/netmeter, created and owned by systemd rather than by an install
+# script guessing at permissions.
+StateDirectory=netmeter
+StateDirectoryMode=0755
+RuntimeDirectory=netmeter
+RuntimeDirectoryMode=0755
+
+# It reads /proc and /sys and writes one database. Nothing else.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=no
+
+# It never opens a network socket -- it only counts other programs'. The unix
+# socket it serves and the netlink it may read are the only families allowed.
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+IPAddressDeny=any
+
+SystemCallFilter=@system-service bpf perf_event_open
+SystemCallErrorNumber=EPERM
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

@@ -137,6 +137,8 @@ pub fn run() {
             crate::api::commands::get_today_usage,
             crate::api::commands::get_config,
             crate::api::commands::set_config,
+            crate::api::commands::get_helper_state,
+            crate::api::commands::get_app_usage,
         ])
         .build(tauri::generate_context!())
         .expect("error while building the NetMeter application")
