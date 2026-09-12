@@ -153,6 +153,8 @@ pub fn run() {
             crate::api::commands::get_app_usage,
             crate::api::commands::get_autostart,
             crate::api::commands::set_autostart,
+            crate::api::commands::can_install_helper,
+            crate::api::commands::install_helper,
         ])
         .on_window_event(|window, event| {
             // Hide rather than close: the engine lives in this process, and

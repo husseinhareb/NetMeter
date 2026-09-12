@@ -161,3 +161,17 @@ code {
 .setting input {
   margin: 2px 0 0;
 }
+
+.note button {
+  padding: 2px 8px;
+  font: inherit;
+  color: var(--fg);
+  background: none;
+  border: 1px solid var(--line);
+  cursor: pointer;
+}
+
+.note button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}

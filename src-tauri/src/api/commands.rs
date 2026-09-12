@@ -381,6 +381,31 @@ pub async fn set_autostart(enabled: bool) -> Result<bool> {
     Ok(crate::system::autostart::is_enabled())
 }
 
+/// Whether this build can offer to install the helper.
+#[tauri::command]
+pub async fn can_install_helper() -> bool {
+    crate::system::helper_install::is_available()
+}
+
+/// Install the per-application helper, asking for authorisation through
+/// polkit. Returns the helper's state afterwards so the UI refreshes itself.
+#[tauri::command]
+pub async fn install_helper() -> Result<crate::api::helper::HelperState> {
+    tauri::async_runtime::spawn_blocking(crate::system::helper_install::install)
+        .await
+        .map_err(|e| Error::Internal(format!("install task failed: {e}")))??;
+
+    // systemd returns before the socket is necessarily accepting.
+    for _ in 0..20 {
+        let state = crate::api::helper::state();
+        if matches!(state, crate::api::helper::HelperState::Running(_)) {
+            return Ok(state);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(150));
+    }
+    Ok(crate::api::helper::state())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

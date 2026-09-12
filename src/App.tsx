@@ -188,6 +188,8 @@ export default function App() {
   const [range, setRange] = useState<Range>(() => ranges()[0]);
   const [history, setHistory] = useState<Series | null>(null);
   const [autostart, setAutostart] = useState(false);
+  const [canInstall, setCanInstall] = useState(false);
+  const [installing, setInstalling] = useState(false);
 
   useEffect(() => {
     const fail = (e: unknown) =>
@@ -214,6 +216,7 @@ export default function App() {
       });
 
     invoke<boolean>("get_autostart").then(setAutostart).catch(fail);
+    invoke<boolean>("can_install_helper").then(setCanInstall).catch(fail);
     invoke<Live>("get_live_rates").then(setLive).catch(fail);
     invoke<Status>("get_monitor_status").then(setStatus).catch(fail);
     loadToday();
@@ -356,8 +359,22 @@ export default function App() {
       {helper?.state === "not_installed" && (
         <p className="note">
           Per-application usage needs the <code>netmeterd</code> helper, which runs as a
-          system service because the kernel does not expose per-process byte counts to
-          an unprivileged program. See <code>docs/PER_APP.md</code>.
+          system service because the kernel does not expose per-process byte counts to an
+          unprivileged program. It is granted <code>CAP_BPF</code> and nothing else.{" "}
+          {canInstall && (
+            <button
+              disabled={installing}
+              onClick={() => {
+                setInstalling(true);
+                invoke<HelperState>("install_helper")
+                  .then(setHelper)
+                  .catch((err) => setError(String(err)))
+                  .finally(() => setInstalling(false));
+              }}
+            >
+              {installing ? "Installing…" : "Install helper"}
+            </button>
+          )}
         </p>
       )}
 
