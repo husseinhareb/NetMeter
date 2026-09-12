@@ -271,8 +271,10 @@ never from anything the client sends.
 
 ## Install story
 
-The GUI ships without the helper and says so. "Enable per-app accounting" runs
-one `pkexec` that installs a unit file and enables it:
+The GUI ships without the helper and says so: it probes the socket and shows
+an explanation instead of an empty table. Installing is a script for now --
+wiring it to a settings button through `pkexec` waits on the app being
+packaged, since before that there is no installed path to the script:
 
 ```ini
 [Service]

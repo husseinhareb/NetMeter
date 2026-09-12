@@ -1,7 +1,7 @@
 #!/bin/sh
 # Install the per-application accounting helper as a system service.
 #
-# Run through pkexec (which is what the GUI does) or with sudo:
+# Run with sudo (or pkexec):
 #
 #     sudo packaging/install-helper.sh [path-to-netmeterd]
 #
