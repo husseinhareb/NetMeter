@@ -96,9 +96,11 @@ function ranges(): Range[] {
   ];
 }
 
-// Hour keys come back as "2026-09-12T14"; nothing else needs shortening.
-function bucketLabel(key: string): string {
-  if (key.includes("T")) return `${key.slice(11)}:00`;
+// An hour key names a UTC hour ("2026-09-12T14"), so it cannot be shown as
+// written: at UTC+2 the first bucket of the local day reads "22". Both the
+// label and the date comparison come from the instant instead.
+function bucketLabel(key: string, startUtcMs: number): string {
+  if (key.includes("T")) return `${pad(new Date(startUtcMs).getHours())}:00`;
   return key;
 }
 
@@ -140,10 +142,11 @@ function HistoryTable({ series }: { series: Series }) {
             const total = b.summary.included.rx_bytes + b.summary.included.tx_bytes;
             // Before NetMeter held any data, a zero is absence rather than an
             // idle period, and it is drawn as neither.
-            const unknown = series.data_since !== null && b.key.slice(0, 10) < series.data_since;
+            const unknown =
+              series.data_since !== null && dayKey(new Date(b.start_utc_ms)) < series.data_since;
             return (
               <tr key={b.key} className={unknown ? "excluded" : ""}>
-                <td className="bucket">{bucketLabel(b.key)}</td>
+                <td className="bucket">{bucketLabel(b.key, b.start_utc_ms)}</td>
                 <td className="barcell">
                   {!unknown && (
                     <span className="bar" style={{ width: `${(100 * total) / peak}%` }} />
@@ -234,20 +237,27 @@ export default function App() {
 
   useEffect(() => {
     let live = true;
-    invoke<Series>("get_usage_series", {
-      query: {
-        granularity: range.granularity,
-        from: range.from,
-        to: range.to,
-        scope: "included",
-        include_breakdown: false,
-      },
-    })
-      .then((s) => live && setHistory(s))
-      .catch(() => live && setHistory(null));
-    // A range change mid-flight must not let the old answer overwrite the new.
+    const load = () =>
+      invoke<Series>("get_usage_series", {
+        query: {
+          granularity: range.granularity,
+          from: range.from,
+          to: range.to,
+          scope: "included",
+          include_breakdown: false,
+        },
+      })
+        .then((s) => live && setHistory(s))
+        .catch(() => live && setHistory(null));
+
+    load();
+    // On the same cadence as the rest of the page. Fetching only on a range
+    // change left today's bars minutes behind the headline number.
+    const timer = setInterval(load, 15000);
     return () => {
+      // A range change mid-flight must not let the old answer overwrite the new.
       live = false;
+      clearInterval(timer);
     };
   }, [range]);
 
