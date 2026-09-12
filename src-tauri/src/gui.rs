@@ -190,23 +190,17 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
         })?)
         .tooltip("NetMeter")
         .menu(&menu)
-        .show_menu_on_left_click(false)
+        // The menu is the whole interface on Linux: libayatana-appindicator
+        // delivers no click events to the application, so a left click that
+        // does not open the menu does nothing at all. `on_tray_icon_event`
+        // was dead code here and is gone rather than left to mislead.
+        .show_menu_on_left_click(true)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => reveal(app),
             // The only way out. Closing the window hides it instead, because a
             // meter that stops when its window closes misses the day.
             "quit" => app.exit(0),
             _ => {}
-        })
-        .on_tray_icon_event(|tray, event| {
-            if let tauri::tray::TrayIconEvent::Click {
-                button: tauri::tray::MouseButton::Left,
-                button_state: tauri::tray::MouseButtonState::Up,
-                ..
-            } = event
-            {
-                reveal(tray.app_handle());
-            }
         })
         .build(app)?;
     Ok(())
