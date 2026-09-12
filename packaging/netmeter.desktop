@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=NetMeter
+GenericName=Network Usage Monitor
+Comment=See how much data each interface and application uses
+Exec=netmeter
+Icon=netmeter
+Terminal=false
+Categories=Network;Monitor;
+Keywords=network;bandwidth;usage;data;traffic;
+StartupWMClass=netmeter
