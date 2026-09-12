@@ -77,23 +77,61 @@ exist.
 
 ## The BPF program
 
-Two `fexit` probes, both of which run in the calling process's context, so the
-pid is correct for receive as well as send:
+### Where to attach, measured rather than assumed
 
-| Probe | Counts |
+An earlier draft of this document proposed `sock_sendmsg` and `sock_recvmsg` —
+two probes, both in process context, covering every protocol. An ftrace probe
+on kernel 7.2.4 (2026-09-12) showed that would have been wrong. Each case moved
+64 MiB through a loopback socket as a single traced pid:
+
+| Workload | Call chain observed |
 |---|---|
-| `fexit/sock_sendmsg` | return value = bytes queued, on success |
-| `fexit/sock_recvmsg` | return value = bytes delivered, on success |
+| `send()` / `sendall()` | `tcp_sendmsg <-__sys_sendto` — **no `sock_sendmsg` at all** |
+| `sendfile()` | `sock_sendmsg <-splice_to_socket` → `tcp_sendmsg` |
+| io_uring send | `sock_sendmsg <-io_send` → `tcp_sendmsg` |
+| UDP send | `udp_sendmsg <-__sys_sendto` — again no `sock_sendmsg` |
+| receive (all cases) | `sock_recvmsg <-__sys_recvfrom`, `<-io_recv`, `<-sock_read_iter` |
 
-Both verified present in the test kernel's symbol table, along with the
-narrower `tcp_sendmsg` / `tcp_cleanup_rbuf` / `udp_sendmsg` / `udp_recvmsg`
-alternatives, which remain the fallback if the wide probes prove to include
-paths we do not want.
+`sock_sendmsg` is inlined into `__sys_sendto` in this build, so the symbol
+survives only for the callers compiled elsewhere — splice and io_uring. A probe
+there would have counted a file server and an io_uring client while reporting
+zero for the ordinary `send()` that most programs use.
 
-Filtering happens in the probe: only `AF_INET` and `AF_INET6` are counted, so
-unix-socket chatter between desktop processes never appears.
+Inlining is a property of the kernel build, not of the kernel version, so
+`sock_recvmsg` being intact here proves nothing about the next machine.
 
-Maps:
+**The attach points are therefore the protocol operations.** `tcp_sendmsg` and
+friends are reached indirectly through `sk->sk_prot->sendmsg`, so they can
+never be inlined away and every upper path must funnel through them — which is
+exactly what the table shows: all three TCP send workloads hit `tcp_sendmsg`,
+whatever route they took to get there.
+
+| Probe | Counts | Covers |
+|---|---|---|
+| `fexit/tcp_sendmsg` | return value | TCP send, IPv4 and IPv6 |
+| `fexit/udp_sendmsg`, `fexit/udpv6_sendmsg` | return value | UDP send, QUIC included |
+| `fentry/tcp_cleanup_rbuf` | `copied` argument | TCP receive, `recvmsg` and splice both |
+| `fexit/udp_recvmsg`, `fexit/udpv6_recvmsg` | return value | UDP receive |
+
+`tcp_cleanup_rbuf` is chosen over the simpler `tcp_recvmsg` because it also
+fires on the splice path. It is called more than once per receive — 2498 calls
+for 1504 receives in the trace — so bytes must come from its `copied`
+argument; counting calls would be meaningless.
+
+The IPv6 UDP pair is the one line of the table the probe did not exercise; its
+test is the existing workload with an `AF_INET6` socket.
+
+All six run in the calling process's context, so the pid is right for receive
+as well as send.
+
+### Cost
+
+Tracing seven functions through 64 MiB of loopback traffic was free at the
+resolution of the test: 0.04 s either way. ftrace's per-call cost is higher
+than a BPF `fexit` hook, so that is a ceiling, and overhead is not a reason to
+narrow the probe set.
+
+### Maps
 
 * `counters`: per-CPU hash, key `{tgid, uid}`, value `{rx, tx}`.
 * `execs`: hash, key `tgid`, value `{comm, start_time}` — written from
@@ -115,13 +153,17 @@ that goes backwards is a reset, never negative traffic.
 
 Stated up front so the "unattributed" row is explainable:
 
-* Packet, IP and TCP headers — these are payload bytes.
+* Packet, IP and TCP headers — these are payload bytes handed to or taken from
+  the protocol, not frames on the wire.
 * ACKs, retransmits and anything the kernel emits without a process behind it.
-* Traffic in other network namespaces (containers) attributed to the container,
-  not the app inside it.
-* `sendfile`/`splice` and `io_uring` paths must be confirmed to route through
-  `sock_sendmsg` on the target kernel; if they do not, they need their own
-  probe. This is the first thing to test, not to assume.
+* Traffic in other network namespaces (containers), which belongs to the
+  container rather than the app inside it.
+* Protocols other than TCP and UDP — raw sockets, ICMP from `ping`. Rare
+  enough on a desktop to live in the remainder.
+
+The syscall layer no longer appears on this list: `write`, `send`, `sendmsg`,
+`sendfile`, `splice` and io_uring were all measured to funnel through the
+protocol operations above.
 
 ## App identity
 
@@ -208,10 +250,11 @@ The daemon is a second binary in the same Cargo workspace, sharing `core` and
 
 ## Order of work
 
-1. A throwaway probe that answers the `sendfile` / `io_uring` question and
-   measures the overhead of the two `fexit` hooks under load. Everything else
-   depends on those two answers.
+1. ~~A probe for the attach points and their overhead.~~ Done, 2026-09-12;
+   it moved the probe set from the socket layer to the protocol layer and
+   found the overhead immaterial.
 2. `netmeterd` with the BPF program and in-memory counters, no persistence,
-   printing to stdout. Verifiable against `nethogs` by hand.
+   printing to stdout. Verifiable against `nethogs` by hand, and against
+   `/proc/net/dev` for the size of the unattributed remainder.
 3. Persistence and retention.
 4. The socket, then the GUI view.
