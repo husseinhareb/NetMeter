@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "netmeter",
+  "productName": "NetMeter",
   "version": "0.1.0",
   "identifier": "com.shtam.netmeter",
   "build": {
@@ -26,8 +26,7 @@
     "active": true,
     "targets": [
       "deb",
-      "rpm",
-      "appimage"
+      "rpm"
     ],
     "icon": [
       "icons/32x32.png",
@@ -44,8 +43,17 @@
         "depends": [
           "libwebkit2gtk-4.1-0",
           "libayatana-appindicator3-1"
-        ]
+        ],
+        "desktopTemplate": "../packaging/netmeter.desktop.hbs"
+      },
+      "rpm": {
+        "depends": [
+          "webkit2gtk4.1",
+          "libappindicator-gtk3"
+        ],
+        "desktopTemplate": "../packaging/netmeter.desktop.hbs"
       }
     }
-  }
+  },
+  "mainBinaryName": "netmeter"
 }
