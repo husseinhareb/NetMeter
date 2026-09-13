@@ -176,8 +176,12 @@ function HistoryTable({ series }: { series: Series }) {
             const total = b.summary.included.rx_bytes + b.summary.included.tx_bytes;
             // Before NetMeter held any data, a zero is absence rather than an
             // idle period, and it is drawn as neither.
-            const unknown =
+            // Two kinds of blank: before NetMeter held data, and after now.
+            // Neither is a zero, and a month view spans both.
+            const before =
               series.data_since !== null && dayKey(new Date(b.start_utc_ms)) < series.data_since;
+            const future = b.start_utc_ms > Date.now();
+            const unknown = before || future;
             return (
               <tr key={b.key} className={unknown ? "excluded" : ""}>
                 <td className="bucket">{bucketLabel(b.key, b.start_utc_ms)}</td>
@@ -186,7 +190,7 @@ function HistoryTable({ series }: { series: Series }) {
                     <span className="bar" style={{ width: `${(100 * total) / peak}%` }} />
                   )}
                 </td>
-                <td>{unknown ? "no data" : bytes(b.summary.included.rx_bytes)}</td>
+                <td>{future ? "" : before ? "no data" : bytes(b.summary.included.rx_bytes)}</td>
                 <td>{unknown ? "" : bytes(b.summary.included.tx_bytes)}</td>
               </tr>
             );
@@ -198,14 +202,13 @@ function HistoryTable({ series }: { series: Series }) {
           belong to no bucket, so they are reported rather than spread. */}
       {hasOffline && (
         <p className="note">
-          {bytes(offline.rx_bytes)} down and {bytes(offline.tx_bytes)} up moved while NetMeter
-          was not running
+          Not running
           {series.offline_windows.length > 0 &&
-            ` (${span(
+            ` ${span(
               series.offline_windows[0].from_utc_ms,
               series.offline_windows[series.offline_windows.length - 1].to_utc_ms,
-            )})`}
-          , and is not placed in any bar above.
+            )}`}
+          : {bytes(offline.rx_bytes)} down, {bytes(offline.tx_bytes)} up. Not in any bar.
         </p>
       )}
     </>
@@ -267,6 +270,10 @@ export default function App() {
     const timer = setInterval(() => {
       loadToday();
       loadApps();
+      // `present` comes from what the engine has seen this session, and at
+      // mount it has seen nothing yet: fetched once, every interface reads as
+      // absent forever.
+      invoke<InterfaceInfo[]>("get_interfaces").then(setKnown).catch(fail);
     }, 15000);
     const subs = [
       listen<Live>("network-usage-updated", (e) => setLive(e.payload)),
@@ -388,7 +395,7 @@ export default function App() {
 
       {quota && (
         <p className="error">
-          {quota.percent}% of this month's allowance used — {bytes(quota.used_bytes)} of{" "}
+          {quota.percent}% of this month's allowance: {bytes(quota.used_bytes)} of{" "}
           {bytes(quota.limit_bytes)}.{" "}
           <button onClick={() => setQuota(null)}>Dismiss</button>
         </p>
@@ -431,16 +438,15 @@ export default function App() {
         </tbody>
       </table>
 
-      <p className="note">Dimmed interfaces are recorded but not counted in the total.</p>
+      <p className="note">Dimmed: recorded, not counted.</p>
 
       <h2>Settings</h2>
 
       {config && (
         <>
           <p className="note">
-            Which interfaces count toward your usage total. Counting a VPN tunnel and the
-            interface carrying it counts the same bytes twice, which is why the default is
-            physical interfaces only.
+            Counted toward your total. Ticking both a VPN and the interface carrying it
+            counts those bytes twice.
           </p>
           <table>
             <thead>
@@ -479,8 +485,7 @@ export default function App() {
               onChange={(e) => setQuota_(e.target.value)}
             />
             Monthly allowance in GB. Warns at{" "}
-            {config.quota.warn_at_percent.join("% and ")}% — NetMeter only tells you, it
-            never touches the connection. Leave empty for no limit.
+            {config.quota.warn_at_percent.join("% and ")}%. Empty for no limit.
           </label>
 
           <label className="setting">
@@ -491,8 +496,7 @@ export default function App() {
               value={config.sampling_interval_seconds}
               onChange={(e) => setInterval_(Number(e.target.value))}
             />
-            Seconds between samples. Lower reacts faster and costs more wake-ups; accuracy
-            does not depend on it, because the kernel counts the bytes either way.
+            Seconds between samples.
           </label>
         </>
       )}
@@ -507,8 +511,7 @@ export default function App() {
               .catch((err) => setError(String(err)))
           }
         />
-        Start at login. Closing the window leaves NetMeter counting in the tray; only Quit
-        from the tray menu stops it.
+        Start at login. Closing the window keeps counting; Quit from the tray to stop.
       </label>
 
       <h2>History</h2>
@@ -531,9 +534,9 @@ export default function App() {
 
       {helper?.state === "not_installed" && (
         <p className="note">
-          Per-application usage needs the <code>netmeterd</code> helper, which runs as a
-          system service because the kernel does not expose per-process byte counts to an
-          unprivileged program. It is granted <code>CAP_BPF</code> and nothing else.{" "}
+          Needs the <code>netmeterd</code> helper: a system service with{" "}
+          <code>CAP_BPF</code>, because the kernel exposes no per-process counters to an
+          unprivileged reader.{" "}
           {canInstall && (
             <button
               disabled={installing}
@@ -558,16 +561,15 @@ export default function App() {
           two numbers sit side by side looking comparable. */}
       {helper?.state === "running" && startedToday(helper.started_at_utc_ms) && (
         <p className="note">
-          Counting applications since{" "}
-          {new Date(helper.started_at_utc_ms).toLocaleTimeString()} — earlier traffic today
-          is in the interface totals above but not attributed below.
+          Since {new Date(helper.started_at_utc_ms).toLocaleTimeString()}. Earlier traffic
+          today is counted above but not attributed here.
         </p>
       )}
 
       {helper?.state === "running" && helper.probes_attached < helper.probes_expected && (
         <p className="error">
-          Only {helper.probes_attached} of {helper.probes_expected} probes attached, so some
-          traffic is not counted below.
+          {helper.probes_attached} of {helper.probes_expected} probes attached; some traffic
+          is uncounted.
         </p>
       )}
 
