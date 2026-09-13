@@ -144,14 +144,6 @@ function span(from: number, to: number): string {
   return `${f.toLocaleString()} – ${t.toLocaleString()}`;
 }
 
-// True when the helper started after local midnight, so it holds only part
-// of today.
-function startedToday(startedAtMs: number): boolean {
-  const midnight = new Date();
-  midnight.setHours(0, 0, 0, 0);
-  return startedAtMs > midnight.getTime();
-}
-
 function HistoryTable({ series }: { series: Series }) {
   const peak = Math.max(
     1,
@@ -374,6 +366,19 @@ export default function App() {
     apply({ ...config, sampling_interval_seconds: seconds });
   }
 
+  // What the helper accounts for: applications plus the protocol overhead it
+  // measured. Anything the interfaces moved beyond that is time it was not
+  // watching.
+  const accounted = apps
+    ? apps.total.reduce((n, a) => n + a.rx_bytes + a.tx_bytes, 0) +
+      apps.overhead.rx_bytes +
+      apps.overhead.tx_bytes
+    : 0;
+  const interfacesToday = today
+    ? today.total.included.rx_bytes + today.total.included.tx_bytes
+    : 0;
+  const unattributedToday = apps ? Math.max(0, interfacesToday - accounted) : 0;
+
   const todayByName = new Map(
     (today?.buckets[0]?.by_interface ?? []).map((i) => [i.name, i.traffic]),
   );
@@ -556,13 +561,13 @@ export default function App() {
 
       {helper?.state === "unreachable" && <p className="error">{helper.message}</p>}
 
-      {/* The interface totals above cover the whole day; the helper only
-          knows what happened since it started. Saying so beats letting the
-          two numbers sit side by side looking comparable. */}
-      {helper?.state === "running" && startedToday(helper.started_at_utc_ms) && (
+      {/* A real gap, measured: what the interfaces moved today minus what the
+          helper accounted for. Unlike interface counters there is no kernel
+          total to recover a per-application gap from, so it is reported. */}
+      {unattributedToday > 1 << 20 && (
         <p className="note">
-          Since {new Date(helper.started_at_utc_ms).toLocaleTimeString()}. Earlier traffic
-          today is counted above but not attributed here.
+          {bytes(unattributedToday)} today is not attributed below: the helper was not
+          running for part of the day.
         </p>
       )}
 
