@@ -52,6 +52,9 @@ impl EventSink for DynSink {
     fn status(&self, p: &MonitorStatus) {
         self.0.status(p)
     }
+    fn quota(&self, payload: &crate::api::events::QuotaWarning) {
+        self.0.quota(payload)
+    }
 }
 
 impl AppState {

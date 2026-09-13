@@ -28,6 +28,7 @@ pub struct EngineConfig {
     pub timezone: chrono_tz::Tz,
     pub policy: ResolvedPolicy,
     pub retention: crate::core::config::RetentionPolicy,
+    pub quota: crate::core::config::QuotaPolicy,
 }
 
 impl From<&Config> for EngineConfig {
@@ -39,6 +40,7 @@ impl From<&Config> for EngineConfig {
             timezone: c.timezone_or_system(),
             policy: c.resolve(),
             retention: c.retention.clone(),
+            quota: c.quota.clone(),
         }
     }
 }
@@ -658,8 +660,96 @@ fn run_tick<P, R, S>(
                         Err(e) => tracing::error!(error = %e, "retention failed"),
                     }
                 }
+
+                check_quota(repository, config, sink, clocks.wall_utc_ms);
             }
         }
+}
+
+/// Warn once per threshold per calendar month.
+///
+/// Evaluated after a flush rather than every tick: the database is the source
+/// of truth for a month's total, and between flushes it cannot have changed.
+///
+/// The threshold already warned about is kept in the database, not in memory,
+/// so restarting the app does not re-announce a month it has already
+/// announced. Going *down* -- the user raising their allowance -- lowers the
+/// mark again, because the next threshold should still fire.
+fn check_quota<R: Repository, S: EventSink>(
+    repository: &mut R,
+    config: &EngineConfig,
+    sink: &Arc<S>,
+    wall_utc_ms: i64,
+) {
+    let Some(limit) = config.quota.monthly_bytes else {
+        return;
+    };
+    let month = crate::core::time::bucket_key(
+        config.timezone,
+        crate::core::types::Granularity::Month,
+        wall_utc_ms,
+    );
+
+    // Day keys, not the month key: the query bounds `local_date` as text, and
+    // "2026-09-13" sorts after "2026-09", so a month key as the upper bound
+    // matches nothing at all.
+    let Some(period) = crate::core::time::period_for_key(config.timezone, &month) else {
+        tracing::error!(month = %month, "could not resolve the current month");
+        return;
+    };
+    let first = crate::core::time::local_date_key(config.timezone, period.start_utc_ms);
+    let last = crate::core::time::local_date_key(config.timezone, period.end_utc_ms - 1);
+
+    let rows = match repository.usage(
+        crate::storage::repository::Resolution::Day,
+        &first,
+        &last,
+        month.len(),
+    ) {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::error!(error = %e, "quota check could not read usage");
+            return;
+        }
+    };
+
+    // Only interfaces the policy counts: the headline number is what a quota
+    // is measured against, not the sum of every tunnel and bridge.
+    let used: u64 = rows
+        .iter()
+        .filter(|r| config.policy.counts(&r.interface_name, r.kind))
+        .map(|r| config.quota.counts.of(r.traffic))
+        .sum();
+
+    let Some(reached) = config.quota.reached(used) else {
+        return;
+    };
+
+    let key = format!("quota_warned_{month}");
+    let already: u8 = repository
+        .meta(&key)
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    if reached <= already {
+        return;
+    }
+
+    if let Err(e) = repository.set_meta(&key, &reached.to_string()) {
+        // Without the record it would warn again on the next flush, which is
+        // worse than not warning: say nothing rather than nag every 30s.
+        tracing::error!(error = %e, "could not record the quota warning; not emitting");
+        return;
+    }
+
+    tracing::info!(month = %month, percent = reached, used, limit, "quota threshold reached");
+    sink.quota(&crate::api::events::QuotaWarning {
+        month,
+        percent: reached,
+        used_bytes: used,
+        limit_bytes: limit,
+    });
 }
 
 /// Write the buffer. Returns true on success.

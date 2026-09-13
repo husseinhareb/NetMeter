@@ -94,6 +94,77 @@ pub struct Config {
     /// Emit at most one live-usage event per this many milliseconds. Coalescing
     /// matters because the webview pays a JSON deserialization for each one.
     pub event_interval_ms: u32,
+    pub quota: QuotaPolicy,
+}
+
+/// A monthly allowance to warn about.
+///
+/// Deliberately a warning and nothing else: NetMeter measures, it does not
+/// interfere with the network. Reaching a quota changes what the app says, not
+/// what the machine does.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct QuotaPolicy {
+    /// The monthly allowance in bytes. `None` disables the feature, which is
+    /// the default: most connections are not metered, and a meter that invents
+    /// a limit would be worse than one with none.
+    pub monthly_bytes: Option<u64>,
+    /// Percentages of the allowance to warn at, in any order. Each fires once
+    /// per calendar month.
+    pub warn_at_percent: Vec<u8>,
+    /// Count the download, the upload, or the sum. Carriers differ, so this
+    /// cannot be assumed.
+    pub counts: QuotaDirection,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuotaDirection {
+    #[default]
+    Both,
+    Download,
+    Upload,
+}
+
+impl QuotaDirection {
+    pub fn of(&self, traffic: crate::core::types::Traffic) -> u64 {
+        match self {
+            Self::Both => traffic.rx_bytes.saturating_add(traffic.tx_bytes),
+            Self::Download => traffic.rx_bytes,
+            Self::Upload => traffic.tx_bytes,
+        }
+    }
+}
+
+impl Default for QuotaPolicy {
+    fn default() -> Self {
+        Self {
+            monthly_bytes: None,
+            // Enough warning to change behaviour, then the moment it matters.
+            warn_at_percent: vec![80, 100],
+            counts: QuotaDirection::default(),
+        }
+    }
+}
+
+impl QuotaPolicy {
+    /// The highest threshold this usage has reached, or `None`.
+    ///
+    /// Highest rather than each crossed in turn: a restart, a long offline
+    /// window or a large recovered delta can pass several at once, and three
+    /// notifications in a row for one event is noise.
+    pub fn reached(&self, used_bytes: u64) -> Option<u8> {
+        let limit = self.monthly_bytes?;
+        if limit == 0 {
+            return None;
+        }
+        let percent = (used_bytes as u128 * 100 / limit as u128).min(u8::MAX as u128) as u64;
+        self.warn_at_percent
+            .iter()
+            .copied()
+            .filter(|t| percent >= *t as u64)
+            .max()
+    }
 }
 
 impl Default for Config {
@@ -112,6 +183,7 @@ impl Default for Config {
             retention: RetentionPolicy::default(),
             logging_level: "info".into(),
             event_interval_ms: 1_000,
+            quota: QuotaPolicy::default(),
         }
     }
 }
@@ -221,6 +293,59 @@ impl ResolvedPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn quota(limit: u64) -> QuotaPolicy {
+        QuotaPolicy {
+            monthly_bytes: Some(limit),
+            ..QuotaPolicy::default()
+        }
+    }
+
+    #[test]
+    fn no_quota_never_warns() {
+        let off = QuotaPolicy::default();
+        assert_eq!(off.monthly_bytes, None, "off by default");
+        assert_eq!(off.reached(u64::MAX), None);
+    }
+
+    #[test]
+    fn a_zero_quota_is_not_an_instant_alarm() {
+        // A limit of zero is a user mid-edit, not a breach of an allowance.
+        assert_eq!(quota(0).reached(1), None);
+    }
+
+    #[test]
+    fn thresholds_fire_at_their_percentage() {
+        let q = quota(100);
+        assert_eq!(q.reached(79), None);
+        assert_eq!(q.reached(80), Some(80));
+        assert_eq!(q.reached(99), Some(80));
+        assert_eq!(q.reached(100), Some(100));
+    }
+
+    #[test]
+    fn passing_several_thresholds_at_once_reports_only_the_highest() {
+        // A recovered offline window can jump from nothing to over the limit;
+        // that is one event, not one notification per threshold passed.
+        assert_eq!(quota(100).reached(250), Some(100));
+    }
+
+    #[test]
+    fn a_huge_overshoot_does_not_overflow() {
+        let q = QuotaPolicy {
+            monthly_bytes: Some(1),
+            ..QuotaPolicy::default()
+        };
+        assert_eq!(q.reached(u64::MAX), Some(100));
+    }
+
+    #[test]
+    fn direction_selects_what_counts() {
+        let t = crate::core::types::Traffic::new(300, 100);
+        assert_eq!(QuotaDirection::Both.of(t), 400);
+        assert_eq!(QuotaDirection::Download.of(t), 300);
+        assert_eq!(QuotaDirection::Upload.of(t), 100);
+    }
 
     #[test]
     fn defaults_are_valid_and_count_only_physical_interfaces() {

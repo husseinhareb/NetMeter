@@ -43,6 +43,10 @@ impl EventSink for TauriEventSink {
     fn status(&self, p: &MonitorStatus) {
         self.emit(names::MONITOR_STATUS_CHANGED, p);
     }
+
+    fn quota(&self, payload: &crate::api::events::QuotaWarning) {
+        self.emit(names::QUOTA_WARNING, payload);
+    }
 }
 
 
@@ -90,6 +94,7 @@ fn install_signal_handlers(app: tauri::AppHandle) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let handle = app.handle().clone();
 

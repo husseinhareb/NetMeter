@@ -1,6 +1,11 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import {
+  isPermissionGranted,
+  requestPermission,
+  sendNotification,
+} from "@tauri-apps/plugin-notification";
 import "./App.css";
 
 type Traffic = { rx_bytes: number; tx_bytes: number };
@@ -21,10 +26,22 @@ type InterfaceInfo = {
 
 type Config = {
   sampling_interval_seconds: number;
+  quota: {
+    monthly_bytes: number | null;
+    warn_at_percent: number[];
+    counts: "both" | "download" | "upload";
+  };
   interface_policy: "physical_only" | "manual" | "all_except";
   included_interfaces: string[];
   excluded_interfaces: string[];
   [key: string]: unknown;
+};
+
+type QuotaWarning = {
+  month: string;
+  percent: number;
+  used_bytes: number;
+  limit_bytes: number;
 };
 
 type Status = {
@@ -78,6 +95,8 @@ function bytes(n: number): string {
   }
   return `${n < 10 && u > 0 ? n.toFixed(1) : Math.round(n)} ${UNITS[u]}`;
 }
+
+const gib = (bytes: number) => Math.round(bytes / 1e9);
 
 const perSec = (n: number | null) => (n === null ? "–" : `${bytes(n)}/s`);
 
@@ -206,6 +225,7 @@ export default function App() {
   const [canInstall, setCanInstall] = useState(false);
   const [config, setConfig] = useState<Config | null>(null);
   const [known, setKnown] = useState<InterfaceInfo[]>([]);
+  const [quota, setQuota] = useState<QuotaWarning | null>(null);
   const [installing, setInstalling] = useState(false);
 
   useEffect(() => {
@@ -251,6 +271,24 @@ export default function App() {
     const subs = [
       listen<Live>("network-usage-updated", (e) => setLive(e.payload)),
       listen<Status>("monitor-status-changed", (e) => setStatus(e.payload)),
+      // The banner is only seen if the window is open, and the point of a
+      // quota warning is the moment it is not.
+      listen<QuotaWarning>("quota-warning", async (e) => {
+        setQuota(e.payload);
+        try {
+          const allowed =
+            (await isPermissionGranted()) || (await requestPermission()) === "granted";
+          if (allowed) {
+            sendNotification({
+              title: `NetMeter: ${e.payload.percent}% of this month's allowance`,
+              body: `${bytes(e.payload.used_bytes)} of ${bytes(e.payload.limit_bytes)} used.`,
+            });
+          }
+        } catch {
+          // A desktop without a notification daemon is not a failure worth
+          // showing; the banner still says it.
+        }
+      }),
     ];
 
     return () => {
@@ -312,6 +350,18 @@ export default function App() {
     });
   }
 
+  // GB as the user means it: 1 GB = 1000^3, the unit a carrier prints on a
+  // bill, not the 1024-based one the byte formatter uses elsewhere.
+  function setQuota_(text: string) {
+    if (!config) return;
+    const gb = text.trim() === "" ? null : Number(text);
+    if (gb !== null && (!Number.isFinite(gb) || gb < 0)) return;
+    apply({
+      ...config,
+      quota: { ...config.quota, monthly_bytes: gb === null ? null : Math.round(gb * 1e9) },
+    });
+  }
+
   function setInterval_(seconds: number) {
     if (!config || seconds < 1 || seconds > 3600) return;
     apply({ ...config, sampling_interval_seconds: seconds });
@@ -335,6 +385,14 @@ export default function App() {
       </h1>
 
       {error && <p className="error">{error}</p>}
+
+      {quota && (
+        <p className="error">
+          {quota.percent}% of this month's allowance used — {bytes(quota.used_bytes)} of{" "}
+          {bytes(quota.limit_bytes)}.{" "}
+          <button onClick={() => setQuota(null)}>Dismiss</button>
+        </p>
+      )}
       {status?.degraded_reason && <p className="error">{status.degraded_reason}</p>}
 
       <dl>
@@ -410,6 +468,20 @@ export default function App() {
               ))}
             </tbody>
           </table>
+
+          <label className="setting">
+            <input
+              type="number"
+              min={0}
+              step={1}
+              value={config.quota.monthly_bytes === null ? "" : gib(config.quota.monthly_bytes)}
+              placeholder="off"
+              onChange={(e) => setQuota_(e.target.value)}
+            />
+            Monthly allowance in GB. Warns at{" "}
+            {config.quota.warn_at_percent.join("% and ")}% — NetMeter only tells you, it
+            never touches the connection. Leave empty for no limit.
+          </label>
 
           <label className="setting">
             <input

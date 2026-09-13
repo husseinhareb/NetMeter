@@ -14,6 +14,7 @@ pub mod names {
     pub const INTERFACE_ADDED: &str = "interface-added";
     pub const INTERFACE_REMOVED: &str = "interface-removed";
     pub const MONITOR_STATUS_CHANGED: &str = "monitor-status-changed";
+    pub const QUOTA_WARNING: &str = "quota-warning";
 }
 
 /// Live rates for one interface.
@@ -54,12 +55,27 @@ pub struct InterfaceChanged {
     pub included: bool,
 }
 
+/// A monthly allowance has reached one of its warning thresholds.
+///
+/// Emitted once per threshold per calendar month, remembered in the database
+/// so a restart does not warn again about a month it already warned about.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuotaWarning {
+    /// `"2026-09"`.
+    pub month: String,
+    /// The threshold crossed, e.g. 80.
+    pub percent: u8,
+    pub used_bytes: u64,
+    pub limit_bytes: u64,
+}
+
 /// Where the engine publishes.
 pub trait EventSink: Send + Sync + 'static {
     fn usage(&self, payload: &LiveUsage);
     fn interface_added(&self, payload: &InterfaceChanged);
     fn interface_removed(&self, payload: &InterfaceChanged);
     fn status(&self, payload: &MonitorStatus);
+    fn quota(&self, payload: &QuotaWarning);
 }
 
 /// Discards everything. Used when no GUI is attached -- which is exactly the
@@ -72,6 +88,7 @@ impl EventSink for NullEventSink {
     fn interface_added(&self, _: &InterfaceChanged) {}
     fn interface_removed(&self, _: &InterfaceChanged) {}
     fn status(&self, _: &MonitorStatus) {}
+    fn quota(&self, _: &QuotaWarning) {}
 }
 
 /// Records what the engine published, for assertions.
@@ -82,6 +99,7 @@ pub struct RecordingSink {
     pub added: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
     pub removed: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
     pub status: std::sync::Arc<std::sync::Mutex<Vec<MonitorStatus>>>,
+    pub quota: std::sync::Arc<std::sync::Mutex<Vec<QuotaWarning>>>,
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -97,6 +115,9 @@ impl EventSink for RecordingSink {
     }
     fn status(&self, p: &MonitorStatus) {
         self.status.lock().expect("lock").push(p.clone());
+    }
+    fn quota(&self, p: &QuotaWarning) {
+        self.quota.lock().expect("lock").push(p.clone());
     }
 }
 

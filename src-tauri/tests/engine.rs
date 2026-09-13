@@ -670,3 +670,108 @@ fn interface_metadata_is_refreshed_rather_than_frozen_at_first_sight() {
          to decide an interface is gone, so a frozen value is not cosmetic"
     );
 }
+
+/// A monthly allowance warns when it is crossed, and then stops talking.
+///
+/// The second half is the part worth testing: a quota check that runs after
+/// every flush and forgets what it has said would notify every thirty seconds
+/// for the rest of the month.
+#[test]
+fn a_quota_warns_once_per_threshold_and_then_goes_quiet() {
+    let provider = FakeNetworkStatsProvider::new();
+    provider.set(iface("wlan0", 3, InterfaceKind::Wifi), 0, 0);
+
+    let path = tempfile::tempdir().expect("tempdir");
+    let db = path.path().join("netmeter.db");
+    let (repo, _) = SqliteRepository::open(&db).expect("open");
+
+    let mut c = config();
+    c.quota = netmeter_lib::core::config::QuotaPolicy {
+        monthly_bytes: Some(1_000),
+        warn_at_percent: vec![80, 100],
+        counts: netmeter_lib::core::config::QuotaDirection::Both,
+    };
+
+    let sink = Arc::new(RecordingSink::default());
+    let engine = Engine::start(
+        provider.clone(),
+        repo,
+        Arc::clone(&sink),
+        c.clone(),
+        "boot-quota".into(),
+    );
+
+    std::thread::sleep(Duration::from_millis(80));
+    // 850 of 1000: past the 80% mark, short of the limit.
+    provider.advance("wlan0", 850, 0);
+    std::thread::sleep(Duration::from_millis(300));
+
+    {
+        let warnings = sink.quota.lock().expect("lock");
+        assert_eq!(warnings.len(), 1, "one warning, not one per flush: {warnings:?}");
+        assert_eq!(warnings[0].percent, 80);
+        assert_eq!(warnings[0].used_bytes, 850);
+        assert_eq!(warnings[0].limit_bytes, 1_000);
+    }
+
+    // Crossing the next threshold is a new event.
+    provider.advance("wlan0", 200, 0);
+    run_for(engine, 6);
+
+    let warnings = sink.quota.lock().expect("lock");
+    assert_eq!(
+        warnings.iter().map(|w| w.percent).collect::<Vec<_>>(),
+        vec![80, 100],
+        "each threshold announces itself exactly once: {warnings:?}"
+    );
+}
+
+/// Restarting must not re-announce a month that was already announced.
+#[test]
+fn a_restart_does_not_repeat_a_warning_it_already_made() {
+    let provider = FakeNetworkStatsProvider::new();
+    provider.set(iface("wlan0", 3, InterfaceKind::Wifi), 0, 0);
+
+    let path = tempfile::tempdir().expect("tempdir");
+    let db = path.path().join("netmeter.db");
+
+    let mut c = config();
+    c.quota = netmeter_lib::core::config::QuotaPolicy {
+        monthly_bytes: Some(1_000),
+        warn_at_percent: vec![80],
+        counts: netmeter_lib::core::config::QuotaDirection::Both,
+    };
+
+    {
+        let (repo, _) = SqliteRepository::open(&db).expect("open");
+        let sink = Arc::new(RecordingSink::default());
+        let engine = Engine::start(
+            provider.clone(),
+            repo,
+            Arc::clone(&sink),
+            c.clone(),
+            "boot-quota".into(),
+        );
+        std::thread::sleep(Duration::from_millis(80));
+        provider.advance("wlan0", 900, 0);
+        run_for(engine, 5);
+        assert_eq!(sink.quota.lock().expect("lock").len(), 1, "warned once");
+    }
+
+    // Same month, same database, a fresh process.
+    let (repo, _) = SqliteRepository::open(&db).expect("reopen");
+    let sink = Arc::new(RecordingSink::default());
+    let engine = Engine::start(
+        provider.clone(),
+        repo,
+        Arc::clone(&sink),
+        c,
+        "boot-quota".into(),
+    );
+    run_for(engine, 6);
+
+    assert!(
+        sink.quota.lock().expect("lock").is_empty(),
+        "the mark is in the database, so a restart says nothing new"
+    );
+}
