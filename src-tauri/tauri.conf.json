@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "NetMeter",
+  "productName": "netmeter",
   "version": "0.1.0",
   "identifier": "com.shtam.netmeter",
   "build": {
@@ -40,20 +40,11 @@
     "longDescription": "NetMeter measures network usage from the kernel's own interface counters. It never captures packets and never inspects their contents.",
     "linux": {
       "deb": {
-        "depends": [
-          "libwebkit2gtk-4.1-0",
-          "libayatana-appindicator3-1"
-        ],
         "desktopTemplate": "../packaging/netmeter.desktop.hbs"
       },
       "rpm": {
-        "depends": [
-          "webkit2gtk4.1",
-          "libappindicator-gtk3"
-        ],
         "desktopTemplate": "../packaging/netmeter.desktop.hbs"
       }
     }
-  },
-  "mainBinaryName": "netmeter"
+  }
 }

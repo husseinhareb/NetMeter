@@ -2,7 +2,7 @@
 name = "netmeter"
 version = "0.1.0"
 description = "Lightweight network usage monitor for Linux"
-authors = ["you"]
+authors = ["Hussein Hareb <shtam.hareb12@gmail.com>"]
 edition = "2021"
 rust-version = "1.82"
 
