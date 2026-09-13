@@ -39,10 +39,9 @@ Measured on a developer machine, 2026-09-12, kernel 7.2.4:
 | `sock_diag` netlink, UDP | **No byte counters exist.** Queue depths only. QUIC — a large share of modern browser and streaming traffic — is invisible. |
 | eBPF | Accurate for TCP and UDP. `/sys/kernel/btf/vmlinux` present, so CO-RE works. |
 
-A TCP-only sampler was considered and rejected: it under-reports exactly the
-applications users care most about, and a usage meter that silently loses a
-browser's QUIC traffic is worse than one that does not claim per-app numbers at
-all.
+A TCP-only sampler was considered and rejected: it under-reports browsers and
+streaming clients, the applications a per-app view exists to show, and it does
+so silently.
 
 eBPF requires privilege and there is no way around it: `kernel.unprivileged_bpf_disabled = 2`
 on a stock Arch kernel means even a restricted unprivileged load is refused.
@@ -187,10 +186,10 @@ no accounting mechanism at any layer can attribute them to an application.
 
 Two consequences for the UI, both now measured rather than guessed:
 
-* The remainder row is not a rounding error to hide. On an upload-light
-  session it is a third of the upstream total, and a user who sees per-app
-  numbers summing to 70% of their upstream needs the reason named, not
-  smoothed away. Call it *protocol overhead*, since that is what it was
+* The remainder needs its own row. On an upload-light session it is a third
+  of the upstream total, so per-app numbers summing to 70% of the upstream
+  need the reason stated. Call it *protocol overhead*, since that is what it
+  was
   measured to be.
 * Per-application figures are payload. They should never be presented as the
   number a data cap is measured against; the interface total stays the

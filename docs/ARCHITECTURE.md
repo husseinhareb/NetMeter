@@ -266,8 +266,7 @@ so there is no stale-lock case.
 
 `MonitorStatus` is derived from heartbeats, never from a stored boolean. A flag
 cannot tell "sampling" from "the thread died an hour ago", and a green light over
-a dead sampler is the worst failure a usage meter can have: it is
-indistinguishable from an idle network. `Stalled` when no tick in 3 intervals,
+a dead sampler is indistinguishable from an idle network. `Stalled` when no tick in 3 intervals,
 `Degraded` when writes are failing or a tick has panicked, plus `parse_errors`
 so a systematically wrong parser is visible rather than silent — that count is
 read from the provider through the `NetworkStatsProvider` trait each tick, not

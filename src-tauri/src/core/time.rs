@@ -21,9 +21,8 @@ use chrono_tz::Tz;
 /// Resolve the system's IANA timezone.
 ///
 /// Falls back to UTC rather than failing: inside a Flatpak or Snap sandbox
-/// `/etc/localtime` may not be visible, and a usage meter that refuses to start
-/// because it cannot name the timezone is worse than one that reports days in
-/// UTC and says so.
+/// `/etc/localtime` may not be visible. Days are then reported in UTC, and the
+/// fallback is logged.
 pub fn system_timezone() -> Tz {
     match iana_time_zone::get_timezone() {
         Ok(name) => match name.parse::<Tz>() {

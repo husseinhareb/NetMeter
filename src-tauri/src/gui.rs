@@ -52,9 +52,9 @@ impl EventSink for TauriEventSink {
 
 /// Flush and stop the monitor on process signals.
 ///
-/// Tauri's `RunEvent::Exit` covers a window close, but not the case that
-/// matters most: `SIGTERM` at logout or reboot, which is exactly when the
-/// unflushed traffic is largest (a sync or an update finishing).
+/// Tauri's `RunEvent::Exit` covers a window close, but not `SIGTERM` at logout
+/// or reboot, when the unflushed traffic is largest (a sync or an update
+/// finishing).
 fn install_signal_handlers(app: tauri::AppHandle) {
     use std::sync::atomic::{AtomicBool, Ordering};
     static TERMINATING: AtomicBool = AtomicBool::new(false);
@@ -123,8 +123,8 @@ pub fn run() {
                 }),
             )?;
 
-            // Monitoring starts with the app: a usage meter that only counts
-            // while its window is open is not a usage meter.
+            // Monitoring starts with the app, not with the window: traffic
+            // while the window is closed still counts.
             if let Err(e) = state.start_monitor() {
                 tracing::error!(error = %e, "monitor did not start");
             }
@@ -204,8 +204,8 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
         .show_menu_on_left_click(true)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => reveal(app),
-            // The only way out. Closing the window hides it instead, because a
-            // meter that stops when its window closes misses the day.
+            // The only way out. Closing the window hides it, so counting
+            // continues.
             "quit" => app.exit(0),
             _ => {}
         })

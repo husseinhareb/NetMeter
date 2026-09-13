@@ -78,8 +78,8 @@ pub trait EventSink: Send + Sync + 'static {
     fn quota(&self, payload: &QuotaWarning);
 }
 
-/// Discards everything. Used when no GUI is attached -- which is exactly the
-/// situation a headless `netmeterd` would be in.
+/// Discards everything. Used when no GUI is attached, as in a headless
+/// `netmeterd`.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct NullEventSink;
 

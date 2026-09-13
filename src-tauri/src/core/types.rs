@@ -112,8 +112,8 @@ pub struct NetworkInterface {
     /// WiFi MAC randomization and bridge membership both change it.
     pub mac: Option<String>,
     /// Kernel interface index. Stable across renames and down/up; changes when
-    /// the device is destroyed and recreated, which is exactly what makes it
-    /// the right guard for carrying a counter baseline forward.
+    /// the device is destroyed and recreated. That is what makes it a valid
+    /// guard for carrying a counter baseline forward.
     pub ifindex: u32,
     pub state: InterfaceState,
 }

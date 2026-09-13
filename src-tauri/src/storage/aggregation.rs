@@ -33,8 +33,8 @@ pub struct SeriesInput<'a> {
 /// Build a dense series.
 ///
 /// Dense means every bucket in `[from, to]` is present, zero-filled. A missing
-/// bucket would force the frontend to reconstruct the local calendar -- with
-/// DST -- in JavaScript, which is exactly the work the backend exists to own.
+/// bucket would force the frontend to reconstruct the local calendar, DST
+/// included, in JavaScript.
 pub fn build_series(input: SeriesInput<'_>) -> UsageSeries {
     let SeriesInput {
         granularity,

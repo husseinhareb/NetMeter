@@ -147,9 +147,8 @@ pending bytes to the database's.
 ```
 
 `state` is derived from heartbeats, not from a stored flag: `stalled` means no
-tick in three intervals. A green light over a dead sampler is the worst failure
-a usage meter can have — it looks exactly like an idle network — so the status
-is computed from evidence that the loop is alive.
+tick in three intervals. A green light over a dead sampler looks identical to an
+idle network, so the status is computed from evidence that the loop is alive.
 
 ## `Config`
 

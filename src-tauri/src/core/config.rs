@@ -30,8 +30,8 @@ pub enum InterfacePolicy {
     /// the user on a metered hotspot behind a VPN who wants the tunnel counted
     /// instead of the carrier.
     Manual,
-    /// Count everything except `exclude`. Documented as double-counting; here
-    /// because an escape hatch that cannot be reached is not an escape hatch.
+    /// Count everything except `exclude`. Double-counts, as documented in
+    /// ACCOUNTING.md; provided as an escape hatch.
     AllExcept,
 }
 
@@ -105,9 +105,9 @@ pub struct Config {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct QuotaPolicy {
-    /// The monthly allowance in bytes. `None` disables the feature, which is
-    /// the default: most connections are not metered, and a meter that invents
-    /// a limit would be worse than one with none.
+    /// The monthly allowance in bytes. `None` disables the feature and is the
+    /// default: most connections are not metered, and there is no sensible
+    /// limit to guess.
     pub monthly_bytes: Option<u64>,
     /// Percentages of the allowance to warn at, in any order. Each fires once
     /// per calendar month.

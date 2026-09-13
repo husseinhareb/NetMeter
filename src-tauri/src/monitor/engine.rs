@@ -132,8 +132,8 @@ impl EngineShared {
     /// Current status, derived from heartbeats rather than from a stored flag.
     ///
     /// A boolean cannot tell "sampling" from "the thread died an hour ago",
-    /// and a green light over a silently dead sampler is the worst failure a
-    /// usage meter can have: it is indistinguishable from an idle network.
+    /// and a green light over a dead sampler is indistinguishable from an idle
+    /// network.
     pub fn status(&self) -> MonitorStatus {
         let interval_s = self.sampling_interval_seconds.load(Ordering::Relaxed).max(1);
         let running = self.running.load(Ordering::Relaxed);
