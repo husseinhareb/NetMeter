@@ -38,3 +38,5 @@ dist-ssr
 /opencode.jsonc
 /docs
 /probe
+/packaging/*.tar.gz
+/packaging/release-notes-*.md
