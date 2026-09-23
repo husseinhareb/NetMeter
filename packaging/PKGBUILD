@@ -1,12 +1,9 @@
 # Maintainer: Hussein Hareb <shtam.hareb12@gmail.com>
 #
-# Builds the latest commit on main from GitHub, so only pushed work is
-# packaged. Locally:
-#
-#     cd packaging && makepkg -si
-pkgname=netmeter-git
-_pkgname=netmeter
-pkgver=r32.3cd88a2
+# Builds a tagged release from GitHub. For a new release: tag and push it,
+# bump pkgver, then `updpkgsums` and `makepkg --printsrcinfo > .SRCINFO`.
+pkgname=netmeter
+pkgver=0.1.0
 pkgrel=1
 pkgdesc="Network usage monitor: interface totals and per-application usage, measured in the kernel"
 arch=('x86_64')
@@ -16,25 +13,21 @@ license=('Apache-2.0')
 # linked in statically).
 depends=('webkit2gtk-4.1' 'gtk3' 'libayatana-appindicator' 'libelf' 'zlib' 'zstd'
          'gcc-libs' 'glibc' 'systemd')
-makedepends=('git' 'cargo' 'nodejs' 'npm' 'clang' 'libbpf')
+makedepends=('cargo' 'nodejs' 'npm' 'clang' 'libbpf')
 optdepends=('polkit: re-enable the service from the GUI after turning it off')
-provides=("$_pkgname")
-conflicts=("$_pkgname")
+# The -git package this replaced.
+conflicts=('netmeter-git')
+replaces=('netmeter-git')
 # makepkg's LTO turns the bundled SQLite into GCC bitcode that the Rust link
 # cannot read (every sqlite3_* symbol comes up undefined). The Rust side
 # already builds with LTO from its own release profile.
 options=('!lto')
 install=netmeter.install
-source=("$_pkgname::git+https://github.com/husseinhareb/NetMeter.git")
-sha256sums=('SKIP')
-
-pkgver() {
-    cd "$_pkgname"
-    printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
-}
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('42ab98774c424f7a4b228896859ed13a277ca08f1d9f2836258c2fbda5c0a9a1')
 
 prepare() {
-    cd "$_pkgname"
+    cd "NetMeter-$pkgver"
     export RUSTUP_TOOLCHAIN=stable
     # Downloads happen here so build() can run offline.
     npm ci
@@ -45,7 +38,7 @@ prepare() {
 }
 
 build() {
-    cd "$_pkgname"
+    cd "NetMeter-$pkgver"
     export RUSTUP_TOOLCHAIN=stable
     # The binary only: the .deb and .rpm bundles are not wanted here.
     npm run tauri build -- --no-bundle -- --frozen
@@ -53,13 +46,13 @@ build() {
 }
 
 check() {
-    cd "$_pkgname"
+    cd "NetMeter-$pkgver"
     export RUSTUP_TOOLCHAIN=stable
     cargo test --release --frozen --manifest-path netmeterd/Cargo.toml
 }
 
 package() {
-    cd "$_pkgname"
+    cd "NetMeter-$pkgver"
     install -Dm755 src-tauri/target/release/netmeter "$pkgdir/usr/bin/netmeter"
     install -Dm755 netmeterd/target/release/netmeterd "$pkgdir/usr/lib/netmeter/netmeterd"
     install -Dm755 packaging/install-helper.sh "$pkgdir/usr/lib/netmeter/install-helper.sh"

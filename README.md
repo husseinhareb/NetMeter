@@ -88,15 +88,15 @@ Data lives in:
 ### Arch Linux (AUR)
 
 ```bash
-git clone https://aur.archlinux.org/netmeter-git.git
-cd netmeter-git
+git clone https://aur.archlinux.org/netmeter.git
+cd netmeter
 makepkg -si
 ```
 
 Or with an AUR helper:
 
 ```bash
-yay -S netmeter-git
+yay -S netmeter
 ```
 
 The package installs the app and the daemon, and enables and starts `netmeterd.service`. History in `/var/lib/netmeter` is kept when the package is removed.
@@ -213,7 +213,7 @@ Building needs Rust, Node.js and npm, and `clang` for the daemon's eBPF program.
 - **feat**: monthly allowance with desktop notifications
 - **feat**: application icons from installed `.desktop` files
 - **feat**: tray icon, close-to-tray, start at login
-- **feat**: AUR package (`netmeter-git`)
+- **feat**: AUR package (`netmeter`)
 
 ## Contributing
 

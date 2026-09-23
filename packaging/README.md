@@ -5,11 +5,11 @@
     cd packaging
     makepkg -si
 
-`netmeter-git` builds the latest commit on `main` from GitHub, so push first:
-uncommitted or unpushed work is not in it. The AUR repository holds
-`PKGBUILD`, `.SRCINFO` and `netmeter.install` from this directory; after
-changing the PKGBUILD, regenerate `.SRCINFO` with
-`makepkg --printsrcinfo > .SRCINFO`.
+`netmeter` builds a tagged release from GitHub. The AUR repository holds
+`PKGBUILD`, `.SRCINFO` and `netmeter.install` from this directory. For a new
+release: tag and push it (`git tag v0.2.0 && git push origin v0.2.0`), bump
+`pkgver` here, run `updpkgsums` and `makepkg --printsrcinfo > .SRCINFO`, then
+copy the three files to the AUR clone and push.
 
 The package enables and starts `netmeterd.service`: the daemon does all measuring and recording, from boot, whether or not anyone is logged
 in, and the GUI (`netmeter`, in the application menu) only displays it.
