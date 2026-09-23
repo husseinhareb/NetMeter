@@ -1,18 +1,37 @@
 # Packaging
 
-`netmeterd.service` and `install-helper.sh` install the per-application
-accounting helper. Everything else in NetMeter runs unprivileged and needs
-none of this.
+## Arch Linux
+
+    cd packaging
+    makepkg -si
+
+`netmeter-git` builds the latest commit on `main` from GitHub, so push first:
+uncommitted or unpushed work is not in it. The AUR repository holds
+`PKGBUILD`, `.SRCINFO` and `netmeter.install` from this directory; after
+changing the PKGBUILD, regenerate `.SRCINFO` with
+`makepkg --printsrcinfo > .SRCINFO`.
+
+The package enables and starts `netmeterd.service`: the daemon does all measuring and recording, from boot, whether or not anyone is logged
+in, and the GUI (`netmeter`, in the application menu) only displays it.
+Without the daemon the GUI falls back to sampling for itself while open.
+
+A helper installed by hand earlier has to go first, or pacman refuses the
+file conflict and the unit in `/etc` shadows the packaged one:
+
+    sudo packaging/install-helper.sh --uninstall
+
+History in `/var/lib/netmeter` survives both that and `pacman -R`.
+
+## Without a package
+
+`netmeterd.service` and `install-helper.sh` install the daemon by hand:
 
     cargo build --release --manifest-path netmeterd/Cargo.toml
     sudo packaging/install-helper.sh
 
-Undo it with `sudo packaging/install-helper.sh --uninstall`.
-
-The GUI does not install the helper itself yet; it detects whether the socket
-is there and says so. Running this from the settings screen through `pkexec`,
-so the escalation is one polkit prompt rather than a terminal, waits on the
-app being packaged — there is no installed path to the script before then.
+Undo it with `sudo packaging/install-helper.sh --uninstall`. Installed by the
+package, the same script (run by the GUI through `pkexec`) only enables or
+disables the service.
 
 ## What it grants
 
@@ -29,8 +48,8 @@ Why any of this is necessary, and what it cannot measure, is in
 
     npm run tauri build
 
-Produces a `.deb` and an `.rpm` under `src-tauri/target/release/bundle/`. On
-Arch, `makepkg` with the `PKGBUILD` here is the native route.
+Produces a `.deb` and an `.rpm` under `src-tauri/target/release/bundle/`.
+They carry the GUI only; on Arch use the `PKGBUILD` above.
 
 AppImage is deliberately not a target. Building one on a current Arch host
 fails twice over: linuxdeploy bundles a 2024 `strip` that cannot read the

@@ -20,6 +20,18 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
+# Run from an installed package: the binary and the unit belong to pacman,
+# so the only thing left to do is switch the service on or off.
+if [ "$HERE" = "$LIBDIR" ] && [ -f /usr/lib/systemd/system/netmeterd.service ]; then
+    if [ "${1:-}" = "--uninstall" ]; then
+        systemctl disable --now netmeterd.service
+    else
+        systemctl enable netmeterd.service
+        systemctl restart netmeterd.service
+    fi
+    exit 0
+fi
+
 if [ "${1:-}" = "--uninstall" ]; then
     systemctl disable --now netmeterd.service 2>/dev/null || true
     rm -f "$UNIT" "$LIBDIR/netmeterd"
