@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/icon.svg" width="128" alt="NetMeter icon"></p>
+
 # NetMeter
 
 NetMeter is a Linux desktop application that measures how much data your computer uses, in total and per application. Built with the Tauri framework, it pairs a Rust backend with a TypeScript/React frontend, and a small system daemon, `netmeterd`, that does the measuring from boot whether or not the window is open. It reads the kernel's own counters and never captures packets or looks at their contents.
