@@ -7,7 +7,8 @@
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "npm run build",
-    "frontendDist": "../dist"
+    "frontendDist": "../dist",
+    "beforeBundleCommand": "cargo build --release --manifest-path \"$(git rev-parse --show-toplevel)/netmeterd/Cargo.toml\""
   },
   "app": {
     "windows": [
@@ -40,10 +41,30 @@
     "longDescription": "NetMeter measures network usage from the kernel's own interface counters. It never captures packets and never inspects their contents.",
     "linux": {
       "deb": {
-        "desktopTemplate": "../packaging/netmeter.desktop.hbs"
+        "desktopTemplate": "../packaging/netmeter.desktop.hbs",
+        "files": {
+          "/usr/lib/netmeter/netmeterd": "../netmeterd/target/release/netmeterd",
+          "/usr/lib/netmeter/install-helper.sh": "../packaging/install-helper.sh",
+          "/usr/lib/systemd/system/netmeterd.service": "../packaging/netmeterd.service"
+        },
+        "depends": [
+          "libelf1"
+        ],
+        "postInstallScript": "../packaging/postinst.sh",
+        "preRemoveScript": "../packaging/prerm.sh"
       },
       "rpm": {
-        "desktopTemplate": "../packaging/netmeter.desktop.hbs"
+        "desktopTemplate": "../packaging/netmeter.desktop.hbs",
+        "files": {
+          "/usr/lib/netmeter/netmeterd": "../netmeterd/target/release/netmeterd",
+          "/usr/lib/netmeter/install-helper.sh": "../packaging/install-helper.sh",
+          "/usr/lib/systemd/system/netmeterd.service": "../packaging/netmeterd.service"
+        },
+        "depends": [
+          "elfutils-libelf"
+        ],
+        "postInstallScript": "../packaging/postinst.sh",
+        "preRemoveScript": "../packaging/prerm.sh"
       }
     }
   }
