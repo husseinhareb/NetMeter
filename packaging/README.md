@@ -41,9 +41,6 @@ entry. systemd owns `/var/lib/netmeter` (the database) and
 service that counts everyone else's traffic cannot open a network connection
 of its own.
 
-Why any of this is necessary, and what it cannot measure, is in
-[../docs/PER_APP.md](../docs/PER_APP.md).
-
 ## Building the app
 
     npm run tauri build

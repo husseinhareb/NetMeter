@@ -30,30 +30,30 @@ container's traffic is counted on the veth, the bridge and the NIC. NetMeter
 records every interface but counts only physical ones toward your total by
 default, and the Settings table lets you change that per interface.
 
-[docs/ACCOUNTING.md](docs/ACCOUNTING.md) has the full table.
+## The daemon
 
-## Per-application usage
+`netmeterd` does the measuring and recording, from boot, whether or not the
+GUI is open: interface totals, and per-application usage through six eBPF
+probes on the kernel's protocol operations. It runs as a system service with
+`CAP_BPF` and `CAP_PERFMON` and nothing else, and serves the GUI over a local
+socket that only ever returns the calling user's own per-app rows. Without it
+the GUI samples interface totals itself while open.
 
-Optional, and it needs a privileged helper: Linux exposes no per-process byte
-counters to an unprivileged reader. `netmeterd` attaches six eBPF probes to the
-kernel's protocol operations, runs as a system service with `CAP_BPF` and
-`CAP_PERFMON` and nothing else, and serves the GUI over a local socket that
-only ever returns the calling user's own rows.
+On Arch, the `netmeter-git` package installs and enables it (see
+[packaging/README.md](packaging/README.md)). By hand:
 
     cargo build --release --manifest-path netmeterd/Cargo.toml
     sudo packaging/install-helper.sh
 
 Per-application figures are payload bytes, so they never sum to what the
 interfaces moved — the difference is headers and acknowledgements, shown as its
-own row rather than hidden. [docs/PER_APP.md](docs/PER_APP.md) explains why, and
-what it cannot attribute.
+own row rather than hidden.
 
 ## Layout
 
     src/                  frontend (React)
     src-tauri/            the app: core, monitor, storage, api, system
     netmeterd/            the privileged per-application helper
-    probe/                throwaway kernel probes, kept because they re-run
     packaging/            systemd unit, PKGBUILD, desktop entry
 
 The backend is one crate with a one-way dependency chain: `monitor/` (kernel
@@ -61,14 +61,6 @@ counters) → `core/` (pure domain logic) → `storage/` (SQLite) → `api/` (Ta
 commands and events). `system/` holds process concerns: clocks, paths, the
 single-instance lock, service lifecycle. Tauri sits behind a feature flag, so
 the helper links the same crate without it.
-
-* [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — how measurement, attribution,
-  storage and retention work, and how the monitor becomes a systemd service.
-* [docs/ACCOUNTING.md](docs/ACCOUNTING.md) — which interfaces count, and why
-  summing them all reports ~3× reality.
-* [docs/API.md](docs/API.md) — the commands and events the frontend uses.
-* [docs/PER_APP.md](docs/PER_APP.md) — per-application accounting: why it needs
-  privilege, and what it can never attribute.
 
 ## Tests
 

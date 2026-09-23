@@ -1,6 +1,5 @@
 [Unit]
 Description=NetMeter per-application network accounting
-Documentation=file:///usr/share/doc/netmeter/PER_APP.md
 # Counting starts when the network does, not when a user logs in.
 After=network.target
 

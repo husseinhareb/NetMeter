@@ -31,3 +31,10 @@ dist-ssr
 /packaging/src
 /packaging/*.pkg.tar.zst
 /packaging/netmeter
+
+# local only
+/.bughunt
+/.vscode
+/opencode.jsonc
+/docs
+/probe

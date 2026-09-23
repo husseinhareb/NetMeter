@@ -75,8 +75,5 @@ package() {
     install -Dm644 src-tauri/icons/128x128@2x.png \
         "$pkgdir/usr/share/icons/hicolor/256x256/apps/netmeter.png"
 
-    for doc in ARCHITECTURE ACCOUNTING API PER_APP; do
-        install -Dm644 "docs/$doc.md" "$pkgdir/usr/share/doc/$_pkgname/$doc.md"
-    done
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }
