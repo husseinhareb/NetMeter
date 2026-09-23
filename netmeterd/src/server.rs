@@ -5,7 +5,8 @@
 //! is the whole access-control story here, which is why it is applied in SQL
 //! rather than filtered after the fact.
 
-use netmeter_lib::api::ipc::{read_frame, write_frame, DaemonStatus, Request, Response};
+use netmeter_lib::api::ipc::{read_frame, write_frame, DaemonStatus, LiveSnapshot, Request, Response};
+use netmeter_lib::monitor::EngineShared;
 use netmeter_lib::storage::database;
 use std::io;
 use std::os::unix::io::AsRawFd;
@@ -27,15 +28,24 @@ pub struct Server {
     db: PathBuf,
     timezone: chrono_tz::Tz,
     status: SharedStatus,
+    /// The interface engine, when it started.
+    engine: Option<Arc<EngineShared>>,
 }
 
 impl Server {
-    pub fn new(path: PathBuf, db: PathBuf, timezone: chrono_tz::Tz, status: SharedStatus) -> Self {
+    pub fn new(
+        path: PathBuf,
+        db: PathBuf,
+        timezone: chrono_tz::Tz,
+        status: SharedStatus,
+        engine: Option<Arc<EngineShared>>,
+    ) -> Self {
         Self {
             path,
             db,
             timezone,
             status,
+            engine,
         }
     }
 
@@ -71,10 +81,11 @@ impl Server {
                     let db = self.db.clone();
                     let tz = self.timezone;
                     let status = Arc::clone(&self.status);
+                    let engine = self.engine.clone();
                     // A thread per connection: these are short, infrequent
                     // and few -- one desktop GUI, occasionally a CLI.
                     std::thread::spawn(move || {
-                        if let Err(e) = handle(stream, &db, tz, &status) {
+                        if let Err(e) = handle(stream, &db, tz, &status, engine.as_deref()) {
                             tracing::debug!(error = %e, "connection ended");
                         }
                     });
@@ -91,6 +102,7 @@ fn handle(
     db: &Path,
     timezone: chrono_tz::Tz,
     status: &SharedStatus,
+    engine: Option<&EngineShared>,
 ) -> io::Result<()> {
     stream.set_read_timeout(Some(IO_TIMEOUT))?;
     stream.set_write_timeout(Some(IO_TIMEOUT))?;
@@ -99,7 +111,7 @@ fn handle(
     // One request per connection. Nothing here needs a session, and a
     // connection that cannot outlive its answer cannot leak one.
     let request: Request = read_frame(&mut stream)?;
-    let response = answer(request, db, uid, timezone, status);
+    let response = answer(request, db, uid, timezone, status, engine);
     write_frame(&mut stream, &response)
 }
 
@@ -109,6 +121,7 @@ fn answer(
     uid: u32,
     timezone: chrono_tz::Tz,
     status: &SharedStatus,
+    engine: Option<&EngineShared>,
 ) -> Response {
     match request {
         Request::Status => match status.lock() {
@@ -116,6 +129,13 @@ fn answer(
             // Poisoned means a previous holder panicked; the contents are
             // still a valid status, so report them rather than refusing.
             Err(e) => Response::Status(e.into_inner().clone()),
+        },
+        Request::Live => match engine {
+            Some(e) => Response::Live(Box::new(LiveSnapshot::of(e))),
+            None => Response::Error {
+                kind: "unavailable".into(),
+                message: "interface recording did not start".into(),
+            },
         },
         Request::AppUsage {
             granularity,

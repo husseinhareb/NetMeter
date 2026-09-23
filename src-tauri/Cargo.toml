@@ -47,6 +47,7 @@ iana-time-zone = "0.1"
 # sigaction (flush-on-SIGTERM). All three are read-only or process-local; none
 # of them need privileges.
 libc = "0.2"
+base64 = "0.22"
 
 thiserror = "2"
 tracing = "0.1"

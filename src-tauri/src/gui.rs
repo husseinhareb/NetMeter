@@ -124,12 +124,12 @@ pub fn run() {
             )?;
 
             // Monitoring starts with the app, not with the window: traffic
-            // while the window is closed still counts.
-            if let Err(e) = state.start_monitor() {
-                tracing::error!(error = %e, "monitor did not start");
-            }
+            // while the window is closed still counts. With netmeterd running
+            // it is already counting, and this only decides where to read.
+            state.follow_daemon();
 
             app.manage(state);
+            spawn_relay(handle.clone());
             install_signal_handlers(handle.clone());
             build_tray(app.handle())?;
 
@@ -160,6 +160,7 @@ pub fn run() {
             crate::api::commands::set_autostart,
             crate::api::commands::can_install_helper,
             crate::api::commands::install_helper,
+            crate::api::commands::get_process_icon,
         ])
         .on_window_event(|window, event| {
             // Hide rather than close: the engine lives in this process, and
@@ -182,6 +183,20 @@ pub fn run() {
                 tracing::info!("NetMeter stopped");
             }
         });
+}
+
+/// Keeps following the daemon: relays its live readings as events, and
+/// switches between it and local sampling as it comes and goes.
+fn spawn_relay(app: tauri::AppHandle) {
+    std::thread::Builder::new()
+        .name("netmeter-relay".into())
+        .spawn(move || loop {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            if let Some(state) = app.try_state::<AppState>() {
+                state.follow_daemon();
+            }
+        })
+        .ok();
 }
 
 /// The tray icon, its menu, and the rule that closing the window does not stop

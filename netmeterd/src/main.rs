@@ -4,20 +4,24 @@
 //! counters live in one BPF hash map, and userspace drains that map, resolves
 //! each pid to an application and writes hourly and daily rows.
 //!
-//! Not yet here: the socket the GUI will read through (step 4).
+//! It also runs the GUI crate's interface engine, so the usage total is
+//! recorded from boot rather than only while a desktop session has the GUI
+//! open. The GUI reads that database and samples for itself only when no
+//! daemon answers.
 
 mod app;
 mod interfaces;
 
+use netmeter_lib::api::events::NullEventSink;
 use netmeter_lib::api::ipc::{self, DaemonStatus};
+use netmeter_lib::core::config::Config;
+use netmeter_lib::monitor::{Engine, EngineConfig, LinuxNetworkStatsProvider};
+use netmeter_lib::storage::SqliteRepository;
 use netmeterd::server::Server;
 use netmeterd::store::{Batch, BucketKey, Retention, Store};
 use std::sync::{Arc, Mutex};
 
-mod skel {
-    #![allow(clippy::all, dead_code, non_snake_case, non_camel_case_types)]
-    include!(concat!(env!("OUT_DIR"), "/netmeterd.skel.rs"));
-}
+use netmeterd::skel;
 
 use libbpf_rs::skel::{OpenSkel, SkelBuilder};
 use libbpf_rs::{MapCore, MapFlags};
@@ -33,6 +37,14 @@ const COMM_LEN: usize = 16;
 
 /// Written by a system service, read by every user's GUI through the socket.
 const DEFAULT_DB: &str = "/var/lib/netmeter/apps.db";
+
+/// The interface totals, beside the per-app database. Machine-wide and
+/// readable by everyone: every user's GUI opens it read-only.
+const INTERFACE_DB: &str = "netmeter.db";
+
+/// Enough slack that ordinary sampling skew never trips the warning, small
+/// enough that a systematic overcount trips it within minutes.
+const EXCESS_WARN_BYTES: u64 = 64 << 20;
 
 struct Sample {
     tgid: u32,
@@ -150,7 +162,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         started_at_utc_ms: time::now_utc_ms(),
         last_flush_utc_ms: None,
         dropped: Default::default(),
+        interface_db: None,
     }));
+
+    // Held for the life of the process: dropping it stops the sampler.
+    let interface_db = db_path.with_file_name(INTERFACE_DB);
+    let engine = start_interface_engine(&interface_db);
+    if let (Some(_), Ok(mut s)) = (&engine, status.lock()) {
+        s.interface_db = Some(interface_db.display().to_string());
+    }
 
     let socket_path = std::env::var_os("NETMETERD_SOCKET")
         .map(PathBuf::from)
@@ -161,6 +181,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             db_path.clone(),
             timezone,
             Arc::clone(&status),
+            engine.as_ref().map(|e| e.shared()),
         );
         // Its own thread with its own read-only connections, so a slow client
         // can never delay a sample.
@@ -178,6 +199,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut session_attributed = (0u64, 0u64);
     let mut session_wire = (0u64, 0u64);
     let mut session_overhead = (0u64, 0u64);
+    // What the applications claimed above what the interfaces moved. It is
+    // clamped away below, so without a running total it leaves no trace.
+    let mut session_excess = (0u64, 0u64);
+    let mut warned_excess = false;
     let mut last_flush = Instant::now();
     let mut last_prune_date = store.meta("last_prune_date")?;
     let started = Instant::now();
@@ -260,6 +285,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             wire.0.saturating_sub(tick_attributed.0),
             wire.1.saturating_sub(tick_attributed.1),
         );
+
+        // The other side of that clamp. Skew cancels out over a session; a
+        // systematic overcount does not, and it used to floor at zero here
+        // and reach the GUI as a per-app total larger than the machine's own.
+        session_excess.0 += tick_attributed.0.saturating_sub(wire.0);
+        session_excess.1 += tick_attributed.1.saturating_sub(wire.1);
+        if !warned_excess && session_excess.0 + session_excess.1 > EXCESS_WARN_BYTES {
+            warned_excess = true;
+            tracing::warn!(
+                rx_bytes = session_excess.0,
+                tx_bytes = session_excess.1,
+                "attributed traffic exceeds the wire total: the per-app figures \
+                 include bytes that never reached a NIC. Tunnelled payload counted \
+                 once for the application and again for the VPN client is the \
+                 expected cause; anything larger is a probe reading the wrong value."
+            );
+        }
         if overhead.0 > 0 || overhead.1 > 0 {
             batch.add_overhead(local_date.clone(), overhead.0, overhead.1);
             session_overhead.0 += overhead.0;
@@ -301,6 +343,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
     }
+}
+
+/// The GUI's interface sampler, hosted here so it runs whether or not anyone
+/// is logged in.
+///
+/// Default configuration on purpose: the interface policy only decides what
+/// counts toward a total, which each GUI applies at query time from its own
+/// settings; every interface is recorded regardless. A failure costs the
+/// interface history, not the per-app accounting, so it is logged rather than
+/// fatal, and the GUI falls back to sampling for itself.
+fn start_interface_engine(path: &std::path::Path) -> Option<Engine> {
+    let (repository, quarantined) = match SqliteRepository::open(path) {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!(path = %path.display(), error = %e, "interface database did not open");
+            return None;
+        }
+    };
+    if let Some(p) = quarantined {
+        tracing::error!(path = %p.display(), "previous interface database was unreadable and was moved aside");
+    }
+    let config = Config::default();
+    tracing::info!(database = %path.display(), "recording interfaces");
+    Some(Engine::start(
+        LinuxNetworkStatsProvider::new(),
+        repository,
+        Arc::new(NullEventSink),
+        EngineConfig::from(&config),
+        netmeter_lib::system::power::boot_id(),
+    ))
 }
 
 /// Both the data directory and the database file itself can be refused, and

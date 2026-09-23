@@ -11,7 +11,9 @@
 //! applications is over half a megabyte, which does not fit in a datagram,
 //! and a length prefix costs four bytes.
 
-use crate::core::types::Granularity;
+use crate::api::events::LiveUsage;
+use crate::core::types::{Granularity, InterfaceKind, MonitorStatus};
+use crate::monitor::engine::EngineShared;
 use serde::{Deserialize, Serialize};
 use std::io::{self, Read, Write};
 
@@ -38,6 +40,9 @@ pub enum Request {
     },
     /// Whether the helper is alive and what it knows.
     Status,
+    /// The interface sampler's in-memory state: what the database does not
+    /// hold yet.
+    Live,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -45,7 +50,70 @@ pub enum Request {
 pub enum Response {
     AppUsage(AppUsage),
     Status(DaemonStatus),
+    Live(Box<LiveSnapshot>),
     Error { kind: String, message: String },
+}
+
+/// The daemon's interface engine, as of the moment of asking.
+///
+/// Interface usage is machine-wide rather than per-user, so this carries no
+/// uid filtering. Totals and `included` flags inside `live` follow the
+/// daemon's default policy; the GUI re-applies its own.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LiveSnapshot {
+    pub status: MonitorStatus,
+    pub live: Option<LiveUsage>,
+    /// Buckets sampled but not yet flushed to the database.
+    pub pending: Vec<PendingBucket>,
+    /// Every interface the engine currently knows.
+    pub interfaces: Vec<LiveInterface>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PendingBucket {
+    pub interface: String,
+    pub hour_start_utc_ms: i64,
+    pub local_date: String,
+    pub traffic: crate::core::types::Traffic,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LiveInterface {
+    pub name: String,
+    pub kind: InterfaceKind,
+    pub mac: Option<String>,
+}
+
+impl LiveSnapshot {
+    /// Read an engine's shared state into its wire form.
+    pub fn of(shared: &EngineShared) -> Self {
+        // Before taking `pending`: `status()` locks it too.
+        let status = shared.status();
+        let pending = shared.pending.lock().unwrap_or_else(|e| e.into_inner());
+        Self {
+            status,
+            live: shared.live.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+            pending: pending
+                .buckets
+                .iter()
+                .map(|(k, v)| PendingBucket {
+                    interface: k.interface.clone(),
+                    hour_start_utc_ms: k.hour_start_utc_ms,
+                    local_date: k.local_date.clone(),
+                    traffic: *v,
+                })
+                .collect(),
+            interfaces: pending
+                .seen
+                .iter()
+                .map(|(name, s)| LiveInterface {
+                    name: name.clone(),
+                    kind: s.kind,
+                    mac: s.mac.clone(),
+                })
+                .collect(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -103,6 +171,11 @@ pub struct DaemonStatus {
     pub last_flush_utc_ms: Option<i64>,
     /// Bytes the kernel counted but could not store because the map was full.
     pub dropped: Traffic,
+    /// The interface usage database the daemon records into, readable by
+    /// every user. `None` from a daemon that predates interface recording,
+    /// which leaves the GUI sampling for itself.
+    #[serde(default)]
+    pub interface_db: Option<String>,
 }
 
 /// Write one length-prefixed JSON frame.

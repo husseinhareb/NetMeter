@@ -2,7 +2,10 @@
 //! serve them over a real unix socket, and read them back as a client.
 
 use netmeter_lib::api::ipc::{read_frame, write_frame, Request, Response};
-use netmeter_lib::core::types::Granularity;
+use netmeter_lib::core::types::{Granularity, InterfaceKind, Traffic};
+use netmeter_lib::monitor::engine::SeenInterface;
+use netmeter_lib::monitor::sampling::BucketKey as InterfaceBucket;
+use netmeter_lib::monitor::EngineShared;
 use netmeterd::server::{Server, SharedStatus};
 use netmeterd::store::{Batch, BucketKey, Store};
 use std::os::unix::net::UnixStream;
@@ -25,6 +28,7 @@ fn status() -> SharedStatus {
         started_at_utc_ms: NOW,
         last_flush_utc_ms: Some(NOW),
         dropped: Default::default(),
+        interface_db: None,
     }))
 }
 
@@ -71,7 +75,11 @@ fn ask(socket: &PathBuf, request: &Request) -> Response {
 }
 
 fn serve(db: PathBuf, socket: PathBuf) {
-    let server = Server::new(socket, db, chrono_tz::UTC, status());
+    serve_with(db, socket, None);
+}
+
+fn serve_with(db: PathBuf, socket: PathBuf, engine: Option<Arc<EngineShared>>) {
+    let server = Server::new(socket, db, chrono_tz::UTC, status(), engine);
     std::thread::spawn(move || server.run().expect("serve"));
 }
 
@@ -228,4 +236,51 @@ fn status_is_served_without_touching_the_database() {
     };
     assert_eq!(s.probes_attached, 6);
     assert_eq!(s.probes_expected, 6);
+}
+
+#[test]
+fn live_serves_the_interface_engines_unflushed_state() {
+    let dir = TempDir::new().expect("dir");
+    let socket = dir.path().join("sock");
+
+    let shared = Arc::new(EngineShared::default());
+    {
+        let mut p = shared.pending.lock().unwrap();
+        p.buckets.insert(
+            InterfaceBucket {
+                interface: "wlp7s0".into(),
+                hour_start_utc_ms: netmeter_lib::core::time::hour_start_ms(NOW),
+                local_date: "2026-09-10".into(),
+            },
+            Traffic::new(4_000, 1_000),
+        );
+        p.seen.insert(
+            "wlp7s0".into(),
+            SeenInterface {
+                kind: InterfaceKind::Wifi,
+                mac: None,
+            },
+        );
+    }
+    serve_with(dir.path().join("absent.db"), socket.clone(), Some(shared));
+
+    let Response::Live(snap) = ask(&socket, &Request::Live) else {
+        panic!("expected a live snapshot");
+    };
+    assert_eq!(snap.pending.len(), 1);
+    assert_eq!(snap.pending[0].traffic, Traffic::new(4_000, 1_000));
+    assert_eq!(snap.interfaces[0].name, "wlp7s0");
+    assert_eq!(snap.interfaces[0].kind, InterfaceKind::Wifi);
+}
+
+#[test]
+fn live_without_an_engine_is_an_error_so_the_gui_samples_for_itself() {
+    let dir = TempDir::new().expect("dir");
+    let socket = dir.path().join("sock");
+    serve(dir.path().join("absent.db"), socket.clone());
+
+    match ask(&socket, &Request::Live) {
+        Response::Error { kind, .. } => assert_eq!(kind, "unavailable"),
+        other => panic!("expected an error, got {other:?}"),
+    }
 }

@@ -4,6 +4,7 @@ pub mod autostart;
 pub mod helper_install;
 pub mod paths;
 pub mod power;
+pub mod proc_icon;
 pub mod state;
 
 pub use lifecycle::MonitorService;

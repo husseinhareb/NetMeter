@@ -59,6 +59,16 @@ pub fn state() -> HelperState {
     }
 }
 
+/// The daemon's interface engine, or `None` if no daemon is recording
+/// interfaces. An older daemon answers `Live` with an error, which lands here
+/// too: the GUI then samples for itself, exactly as with no daemon at all.
+pub fn live() -> Option<ipc::LiveSnapshot> {
+    match ask(&Request::Live) {
+        Ok(Response::Live(s)) => Some(*s),
+        _ => None,
+    }
+}
+
 /// No socket file, or nothing accepting on it. Both mean "not installed"
 /// rather than "broken", and the GUI shows an invitation instead of an error.
 fn is_absent(e: &io::Error) -> bool {

@@ -21,6 +21,7 @@ fn main() {
         started_at_utc_ms: netmeter_lib::core::time::now_utc_ms(),
         last_flush_utc_ms: None,
         dropped: Default::default(),
+        interface_db: None,
     }));
 
     println!("serving {db} on {socket}");
@@ -29,6 +30,7 @@ fn main() {
         db.into(),
         netmeter_lib::core::time::system_timezone(),
         status,
+        None,
     )
     .run()
     .expect("serve");

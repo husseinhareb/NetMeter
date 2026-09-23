@@ -681,10 +681,33 @@ fn check_quota<R: Repository, S: EventSink>(
     sink: &Arc<S>,
     wall_utc_ms: i64,
 ) {
-    let Some(limit) = config.quota.monthly_bytes else {
+    let Some(month) = quota_month(config, wall_utc_ms) else {
         return;
     };
-    let month = crate::core::time::bucket_key(
+    match repository.usage(
+        crate::storage::repository::Resolution::Day,
+        &month.first_day,
+        &month.last_day,
+        month.key.len(),
+    ) {
+        Ok(rows) => apply_quota(&rows, &month, repository, config, sink),
+        Err(e) => tracing::error!(error = %e, "quota check could not read usage"),
+    }
+}
+
+/// The calendar month a quota check covers.
+pub struct QuotaMonth {
+    /// `"2026-09"`.
+    pub key: String,
+    pub first_day: String,
+    pub last_day: String,
+}
+
+/// The month to check, or `None` when no allowance is set and there is
+/// nothing to read.
+pub fn quota_month(config: &EngineConfig, wall_utc_ms: i64) -> Option<QuotaMonth> {
+    config.quota.monthly_bytes?;
+    let key = crate::core::time::bucket_key(
         config.timezone,
         crate::core::types::Granularity::Month,
         wall_utc_ms,
@@ -693,24 +716,31 @@ fn check_quota<R: Repository, S: EventSink>(
     // Day keys, not the month key: the query bounds `local_date` as text, and
     // "2026-09-13" sorts after "2026-09", so a month key as the upper bound
     // matches nothing at all.
-    let Some(period) = crate::core::time::period_for_key(config.timezone, &month) else {
-        tracing::error!(month = %month, "could not resolve the current month");
-        return;
+    let Some(period) = crate::core::time::period_for_key(config.timezone, &key) else {
+        tracing::error!(month = %key, "could not resolve the current month");
+        return None;
     };
-    let first = crate::core::time::local_date_key(config.timezone, period.start_utc_ms);
-    let last = crate::core::time::local_date_key(config.timezone, period.end_utc_ms - 1);
+    Some(QuotaMonth {
+        first_day: crate::core::time::local_date_key(config.timezone, period.start_utc_ms),
+        last_day: crate::core::time::local_date_key(config.timezone, period.end_utc_ms - 1),
+        key,
+    })
+}
 
-    let rows = match repository.usage(
-        crate::storage::repository::Resolution::Day,
-        &first,
-        &last,
-        month.len(),
-    ) {
-        Ok(rows) => rows,
-        Err(e) => {
-            tracing::error!(error = %e, "quota check could not read usage");
-            return;
-        }
+/// Warn about `rows`, the month's usage, if a new threshold was crossed.
+///
+/// `marks` keeps which threshold was already announced. It is separate from
+/// where the rows came from because the GUI reads the daemon's database
+/// read-only and keeps its marks in its own.
+pub fn apply_quota<R: Repository, S: EventSink>(
+    rows: &[crate::storage::repository::UsageRow],
+    month: &QuotaMonth,
+    marks: &mut R,
+    config: &EngineConfig,
+    sink: &Arc<S>,
+) {
+    let Some(limit) = config.quota.monthly_bytes else {
+        return;
     };
 
     // Only interfaces the policy counts: the headline number is what a quota
@@ -725,8 +755,8 @@ fn check_quota<R: Repository, S: EventSink>(
         return;
     };
 
-    let key = format!("quota_warned_{month}");
-    let already: u8 = repository
+    let key = format!("quota_warned_{}", month.key);
+    let already: u8 = marks
         .meta(&key)
         .ok()
         .flatten()
@@ -736,16 +766,16 @@ fn check_quota<R: Repository, S: EventSink>(
         return;
     }
 
-    if let Err(e) = repository.set_meta(&key, &reached.to_string()) {
+    if let Err(e) = marks.set_meta(&key, &reached.to_string()) {
         // Without the record it would warn again on the next flush, which is
         // worse than not warning: say nothing rather than nag every 30s.
         tracing::error!(error = %e, "could not record the quota warning; not emitting");
         return;
     }
 
-    tracing::info!(month = %month, percent = reached, used, limit, "quota threshold reached");
+    tracing::info!(month = %month.key, percent = reached, used, limit, "quota threshold reached");
     sink.quota(&crate::api::events::QuotaWarning {
-        month,
+        month: month.key.clone(),
         percent: reached,
         used_bytes: used,
         limit_bytes: limit,

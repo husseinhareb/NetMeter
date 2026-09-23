@@ -29,6 +29,9 @@ encrypted carrier.
 Loopback makes it worse: `lo` on this machine sits at 1.08 GB, which is more
 than the entire Tailscale interface, and represents exactly zero network usage.
 
+The per-application attribution applies the same rule at the socket, for the
+same reason -- see *Loopback is not traffic* in [PER_APP.md](PER_APP.md).
+
 ## The rule
 
 **Physical is something NetMeter proves, never something it falls back to.**

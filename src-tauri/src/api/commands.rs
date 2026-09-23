@@ -46,28 +46,28 @@ fn resolve_range(
 /// treat both the same way. This is what keeps "Today" from freezing between
 /// flushes and then jumping.
 fn pending_rows(state: &AppState, tz: chrono_tz::Tz, granularity: Granularity) -> Vec<UsageRow> {
-    let Some(shared) = state.engine_shared() else {
+    let Some(snapshot) = state.snapshot() else {
         return Vec::new();
     };
-    let pending = shared.pending.lock().unwrap_or_else(|e| e.into_inner());
-    pending
-        .buckets
+    snapshot
+        .pending
         .iter()
-        .map(|(k, v)| UsageRow {
+        .map(|b| UsageRow {
             bucket_key: match granularity {
-                Granularity::Hour => time::bucket_key(tz, granularity, k.hour_start_utc_ms),
-                g => k.local_date[..g.key_len().min(k.local_date.len())].to_string(),
+                Granularity::Hour => time::bucket_key(tz, granularity, b.hour_start_utc_ms),
+                g => b.local_date[..g.key_len().min(b.local_date.len())].to_string(),
             },
             // Not yet persisted, so it has no row id. Negative to guarantee it
             // cannot collide with a real one when merging a breakdown.
             interface_id: -1,
-            interface_name: k.interface.clone(),
-            kind: pending
-                .seen
-                .get(&k.interface)
+            interface_name: b.interface.clone(),
+            kind: snapshot
+                .interfaces
+                .iter()
+                .find(|i| i.name == b.interface)
                 .map(|i| i.kind)
                 .unwrap_or(InterfaceKind::Virtual),
-            traffic: *v,
+            traffic: b.traffic,
         })
         .collect()
 }
@@ -404,6 +404,15 @@ pub async fn install_helper() -> Result<crate::api::helper::HelperState> {
         std::thread::sleep(std::time::Duration::from_millis(150));
     }
     Ok(crate::api::helper::state())
+}
+
+/// Resolves a process or application name to a system icon base64 data URL.
+#[tauri::command]
+pub async fn get_process_icon(name: String) -> Option<String> {
+    tauri::async_runtime::spawn_blocking(move || crate::system::proc_icon::get_process_icon(&name))
+        .await
+        .ok()
+        .flatten()
 }
 
 #[cfg(test)]

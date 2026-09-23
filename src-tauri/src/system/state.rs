@@ -1,14 +1,23 @@
 //! The state Tauri manages, and the only place the layers are wired together.
 
 use crate::api::events::{EventSink, LiveUsage};
+use crate::api::ipc::LiveSnapshot;
 use crate::api::models::ConfigApplied;
-use crate::core::config::Config;
+use crate::core::config::{Config, ResolvedPolicy};
 use crate::core::errors::{ConfigError, Error, Result};
-use crate::core::types::{DataRate, MonitorState, MonitorStatus, Traffic, UsageSummary};
+use crate::core::types::{
+    DataRate, InterfaceKind, MonitorState, MonitorStatus, Traffic, UsageSummary,
+};
+use crate::monitor::engine::SeenInterface;
 use crate::system::lifecycle::MonitorService;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
+use std::time::{Duration, Instant};
+
+/// How often a quota is checked against the daemon's database. The daemon
+/// flushes every 30 s, so checking faster would re-read unchanged rows.
+const QUOTA_EVERY: Duration = Duration::from_secs(60);
 
 /// Locks a mutex, recovering from poisoning.
 ///
@@ -19,11 +28,34 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// Where interface usage comes from.
+///
+/// The daemon records from boot whether or not anyone is logged in, so while
+/// it answers it is the only source: the GUI's own engine is stopped, reads
+/// go to the daemon's database, and live readings are relayed from it. With
+/// no daemon the GUI samples for itself, as it always did.
+enum Source {
+    /// Before the first check.
+    Undecided,
+    Local,
+    Daemon(Box<Daemon>),
+}
+
+struct Daemon {
+    db: PathBuf,
+    snapshot: LiveSnapshot,
+    last_quota: Option<Instant>,
+}
+
 /// Everything the commands need.
 pub struct AppState {
     config: RwLock<Arc<Config>>,
     config_path: PathBuf,
+    /// The GUI's own database: history while no daemon runs, and the quota
+    /// marks in every mode.
     db_path: PathBuf,
+    source: Mutex<Source>,
+    sink: Arc<DynSink>,
     service: Mutex<MonitorService<DynSink>>,
     /// Held for the process lifetime. Dropping it releases the single-instance
     /// lock, so it lives here rather than in a local.
@@ -87,11 +119,14 @@ impl AppState {
             }
         };
 
+        let sink = Arc::new(sink);
         Ok(Self {
             config: RwLock::new(Arc::new(config)),
             config_path,
             db_path,
-            service: Mutex::new(MonitorService::new(Arc::new(sink))),
+            source: Mutex::new(Source::Undecided),
+            service: Mutex::new(MonitorService::new(Arc::clone(&sink))),
+            sink,
             _instance_lock: instance_lock,
         })
     }
@@ -103,12 +138,189 @@ impl AppState {
             .unwrap_or_else(|e| Arc::clone(&e.into_inner()))
     }
 
+    /// The database history is read from: the daemon's while it records,
+    /// otherwise the GUI's own.
     pub fn db_path(&self) -> PathBuf {
-        self.db_path.clone()
+        match &*lock(&self.source) {
+            Source::Daemon(d) => d.db.clone(),
+            _ => self.db_path.clone(),
+        }
     }
 
     pub fn engine_shared(&self) -> Option<Arc<crate::monitor::engine::EngineShared>> {
         lock(&self.service).shared()
+    }
+
+    /// The sampler's in-memory state, from whichever engine is the source.
+    pub fn snapshot(&self) -> Option<LiveSnapshot> {
+        if let Source::Daemon(d) = &*lock(&self.source) {
+            return Some(d.snapshot.clone());
+        }
+        self.engine_shared().map(|s| LiveSnapshot::of(&s))
+    }
+
+    /// Follow the daemon: read from it while it records, sample locally when
+    /// it does not. Called once a second by the relay thread, and once at
+    /// startup so the first window already reads from the right place.
+    pub fn follow_daemon(&self) {
+        // Socket calls happen before the lock: a wedged daemon may take the
+        // full timeout, and commands must not queue behind it.
+        let snapshot = crate::api::helper::live();
+        let known_db = match &*lock(&self.source) {
+            Source::Daemon(d) => Some(d.db.clone()),
+            _ => None,
+        };
+        let db = match (&snapshot, known_db) {
+            (None, _) => None,
+            (Some(_), Some(db)) => Some(db),
+            (Some(_), None) => match crate::api::helper::state() {
+                crate::api::helper::HelperState::Running(s) => s.interface_db.map(PathBuf::from),
+                _ => None,
+            },
+        };
+
+        let (Some(snapshot), Some(db)) = (snapshot, db) else {
+            self.use_local();
+            return;
+        };
+
+        let previous = {
+            let mut source = lock(&self.source);
+            let previous = std::mem::replace(&mut *source, Source::Undecided);
+            let last_quota = match &previous {
+                Source::Daemon(d) => d.last_quota,
+                _ => None,
+            };
+            *source = Source::Daemon(Box::new(Daemon {
+                db: db.clone(),
+                snapshot: snapshot.clone(),
+                last_quota,
+            }));
+            previous
+        };
+
+        let previous = match previous {
+            Source::Daemon(d) => Some(d.snapshot),
+            _ => {
+                // Flushes what the local engine buffered, then leaves the
+                // daemon as the only sampler.
+                lock(&self.service).stop();
+                tracing::info!(database = %db.display(), "reading interface usage from netmeterd");
+                None
+            }
+        };
+
+        // The frontend learns about readings only through events, so what the
+        // local engine would have emitted is emitted here instead.
+        if let Some(live) = &snapshot.live {
+            let seen_before = previous
+                .as_ref()
+                .and_then(|p| p.live.as_ref())
+                .is_some_and(|p| p.sampled_at_utc_ms == live.sampled_at_utc_ms);
+            if !seen_before {
+                self.sink.usage(&self.with_policy(live.clone(), &snapshot));
+            }
+        }
+        if previous.as_ref().map(|p| &p.status) != Some(&snapshot.status) {
+            self.sink.status(&snapshot.status);
+        }
+
+        self.quota_from_daemon(&db);
+    }
+
+    fn use_local(&self) {
+        let was = std::mem::replace(&mut *lock(&self.source), Source::Local);
+        if matches!(was, Source::Local) {
+            return;
+        }
+        if matches!(was, Source::Daemon(_)) {
+            tracing::warn!("netmeterd stopped answering; sampling locally");
+        }
+        if let Err(e) = self.start_monitor() {
+            tracing::error!(error = %e, "monitor did not start");
+        }
+    }
+
+    /// The daemon records with its default policy; the quota is measured
+    /// against this user's. The marks go in the GUI's own database, since the
+    /// daemon's is read-only here.
+    fn quota_from_daemon(&self, db: &Path) {
+        {
+            let mut source = lock(&self.source);
+            let Source::Daemon(d) = &mut *source else {
+                return;
+            };
+            if d.last_quota.is_some_and(|t| t.elapsed() < QUOTA_EVERY) {
+                return;
+            }
+            d.last_quota = Some(Instant::now());
+        }
+
+        let config = crate::monitor::engine::EngineConfig::from(&*self.config());
+        let now = crate::core::time::now_utc_ms();
+        let Some(month) = crate::monitor::engine::quota_month(&config, now) else {
+            return;
+        };
+        let rows = crate::storage::database::open_reader(db).and_then(|c| {
+            crate::storage::repository::query_usage(
+                &c,
+                crate::storage::repository::Resolution::Day,
+                &month.first_day,
+                &month.last_day,
+                month.key.len(),
+            )
+        });
+        let rows = match rows {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::error!(error = %e, "quota check could not read the daemon's usage");
+                return;
+            }
+        };
+        match crate::storage::repository::SqliteRepository::open(&self.db_path) {
+            Ok((mut marks, _)) => {
+                crate::monitor::engine::apply_quota(&rows, &month, &mut marks, &config, &self.sink)
+            }
+            Err(e) => tracing::error!(error = %e, "quota marks unavailable"),
+        }
+    }
+
+    /// Re-apply this user's interface policy to a reading taken under the
+    /// sampler's own. Only the daemon's differs, but the rule is cheap enough
+    /// to apply to every reading rather than to keep track of which is which.
+    fn with_policy(&self, mut live: LiveUsage, snapshot: &LiveSnapshot) -> LiveUsage {
+        let policy: ResolvedPolicy = self.config().resolve();
+        let kind = |name: &str| {
+            snapshot
+                .interfaces
+                .iter()
+                .find(|i| i.name == name)
+                .map(|i| i.kind)
+                .unwrap_or(InterfaceKind::Virtual)
+        };
+
+        let mut counted = Traffic::ZERO;
+        for i in &mut live.by_interface {
+            i.included = policy.counts(&i.name, kind(&i.name));
+            if i.included {
+                counted += i.traffic;
+            }
+        }
+        live.total = live
+            .interval_ms
+            .map(|ms| crate::core::statistics::rate(counted, Duration::from_millis(ms)))
+            .unwrap_or(DataRate::UNKNOWN);
+
+        let tz = self.config().timezone_or_system();
+        let today = crate::core::time::local_date_key(tz, live.sampled_at_utc_ms);
+        live.pending_today = UsageSummary::ZERO;
+        for b in snapshot.pending.iter().filter(|b| b.local_date == today) {
+            live.pending_today.observed += b.traffic;
+            if policy.counts(&b.interface, kind(&b.interface)) {
+                live.pending_today.included += b.traffic;
+            }
+        }
+        live
     }
 
     pub fn start_monitor(&self) -> Result<()> {
@@ -131,8 +343,8 @@ impl AppState {
     }
 
     pub fn status(&self) -> MonitorStatus {
-        match self.engine_shared() {
-            Some(s) => s.status(),
+        match self.snapshot() {
+            Some(s) => s.status,
             None => MonitorStatus {
                 state: MonitorState::Stopped,
                 started_at_utc_ms: None,
@@ -153,8 +365,8 @@ impl AppState {
 
     /// The most recent live sample, or an empty reading if none has been taken.
     pub fn live_rates(&self) -> LiveUsage {
-        self.engine_shared()
-            .and_then(|s| lock(&s.live).clone())
+        self.snapshot()
+            .and_then(|s| s.live.clone().map(|l| self.with_policy(l, &s)))
             .unwrap_or(LiveUsage {
                 sampled_at_utc_ms: crate::core::time::now_utc_ms(),
                 interval_ms: None,
@@ -169,9 +381,14 @@ impl AppState {
     ///
     /// These are the ones a fresh NIC appears in before the first flush has
     /// written it to the database, so `get_interfaces` can list it immediately.
-    pub fn live_interfaces(&self) -> HashMap<String, crate::monitor::engine::SeenInterface> {
-        self.engine_shared()
-            .map(|s| lock(&s.pending).seen.clone())
+    pub fn live_interfaces(&self) -> HashMap<String, SeenInterface> {
+        self.snapshot()
+            .map(|s| {
+                s.interfaces
+                    .into_iter()
+                    .map(|i| (i.name, SeenInterface { kind: i.kind, mac: i.mac }))
+                    .collect()
+            })
             .unwrap_or_default()
     }
 

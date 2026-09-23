@@ -3,7 +3,7 @@
 How NetMeter attributes traffic to the program that caused it, the way
 Windows' *Data usage* page does.
 
-This is a design document. Nothing here is implemented yet.
+This is the design document, kept current with the daemon in `netmeterd/`.
 
 ## The one rule that does not change
 
@@ -109,19 +109,75 @@ whatever route they took to get there.
 |---|---|---|
 | `fexit/tcp_sendmsg` | return value | TCP send, IPv4 and IPv6 |
 | `fexit/udp_sendmsg`, `fexit/udpv6_sendmsg` | return value | UDP send, QUIC included |
-| `fentry/tcp_cleanup_rbuf` | `copied` argument | TCP receive, `recvmsg` and splice both |
+| `fexit/tcp_recvmsg` | return value | TCP receive |
 | `fexit/udp_recvmsg`, `fexit/udpv6_recvmsg` | return value | UDP receive |
 
-`tcp_cleanup_rbuf` is chosen over the simpler `tcp_recvmsg` because it also
-fires on the splice path. It is called more than once per receive — 2498 calls
-for 1504 receives in the trace — so bytes must come from its `copied`
-argument; counting calls would be meaningless.
+`tcp_cleanup_rbuf` was tried first, because it also fires on the splice path.
+It is called more than once per receive — 2498 calls for 1504 receives in the
+trace — and its `copied` argument is that call's running total rather than
+each fragment, so summing it squares the download figure. `tcp_recvmsg` is
+what ships; the cost is the splice receive path, which lands in the
+unattributed remainder.
 
 The IPv6 UDP pair is the one line of the table the probe did not exercise; its
 test is the existing workload with an `AF_INET6` socket.
 
 All six run in the calling process's context, so the pid is right for receive
 as well as send.
+
+### Loopback is not traffic
+
+The probes sit above the routing decision, so they see a byte to `127.0.0.1`
+exactly as they see a byte to the internet. Counting both would contradict the
+rule at the top of this document: `docs/ACCOUNTING.md` excludes `lo` from the
+interface total because those bytes never left the machine, and an attribution
+of that total has to exclude them too.
+
+So `account()` reads the socket's address family and its two endpoints, and
+returns without counting when either end is `127.0.0.0/8`, `::1` or the
+v4-mapped `::ffff:127.0.0.0/8`. The fields come from partial `struct sock` and
+`struct sock_common` declarations carrying `preserve_access_index`, so CO-RE
+relocates the offsets against the running kernel and no `vmlinux.h` has to be
+generated or committed. `fexit` already requires the kernel's BTF, so this
+asks for nothing the program did not already need.
+
+One trap, found by the check on its first run: a partial declaration must
+carry `preserve_access_index` only where its fields are actually read from
+kernel memory. The local `struct in6_addr` exists solely to give
+`skc_v6_daddr` a struct type — CO-RE compares a field's *kind* against the
+kernel's, and an array would not match — and it is copied out whole. With the
+attribute on it, reading its member emitted a relocation for a name the
+kernel's `in6_addr` does not have, and the verifier rejected the program with
+`failed to resolve CO-RE relocation <byte_off> struct in6_addr.addr8`.
+
+This matters more than it sounds. On a machine running a local model server
+behind a local reverse proxy, every request crosses the loopback twice — once
+billed to the client's `tcp_sendmsg`, once to the server's `tcp_recvmsg` — and
+the per-app table reported 133 GiB against a measured wire total of 80 GiB.
+
+Two edges remain, both deliberate:
+
+* **An unconnected UDP socket bound to `0.0.0.0`** has neither endpoint set,
+  so datagrams it sends to `127.0.0.1` are still counted. A stub resolver is
+  the realistic case. Reading the destination out of the `msghdr` is the
+  upgrade if it ever amounts to anything measurable.
+* **Traffic to the host's own LAN address** is routed over `lo` by the kernel
+  but carries a non-loopback address, so it is counted. The rule is the
+  address, not the route — the same rule the interface total applies.
+
+`examples/loopback.rs` is the check: it moves the same 64 MiB over both a
+loopback socket and one bound to the host's own address, and asserts that the
+first is not counted and the second is. It needs root, because it loads the
+probes.
+
+### What the remainder cannot fix
+
+A userspace VPN is counted twice by construction: the application's
+`tcp_sendmsg` for the payload, and the tunnel client's `udp_sendmsg` for the
+same bytes encrypted. Only one of them reaches the wire. There is no socket
+field that distinguishes them, so per-app totals on a heavily tunnelled
+machine still run above the interface total, and the daemon logs a warning
+when the gap exceeds 64 MiB in a session rather than clamping it out of sight.
 
 ### Cost
 
@@ -317,6 +373,10 @@ The daemon is a second binary in the same Cargo workspace, sharing `core` and
    of 2^32; and `tcp_cleanup_rbuf` passes a per-call *running total*, so
    summing it squares the download figure. Both produced confident,
    well-formatted, wildly wrong tables, which is why the daemon now refuses to
-   trust itself when attribution exceeds the wire total.
+   trust itself when attribution exceeds the wire total. A third, found only
+   once the GUI put the two numbers on adjacent pages: the probes counted
+   loopback, so a machine running local servers reported more per-app traffic
+   than it had network. Fixed 2026-09-18; the clamp that hid it now keeps a
+   running total and warns.
 3. Persistence and retention.
 4. The socket, then the GUI view.
