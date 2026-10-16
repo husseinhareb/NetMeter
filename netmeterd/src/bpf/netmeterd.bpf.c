@@ -188,8 +188,15 @@ int BPF_PROG(tcp_send, struct sock *sk, void *msg, __u64 size, int ret) {
     return 0;
 }
 
+// A dual-stack IPv6 socket sending to an IPv4 address (Go's default, so
+// cloudflared's QUIC tunnel) goes through udpv6_sendmsg, which hands the
+// datagram to udp_sendmsg and returns its result. Both probes fire; the v6 one
+// counts it, so this one skips v6 sockets. Observed live: cloudflared credited
+// with 540 MiB of upload in two hours in which the NIC sent about 360 MiB.
 SEC("fexit/udp_sendmsg")
 int BPF_PROG(udp_send, struct sock *sk, void *msg, __u64 len, int ret) {
+    if (BPF_CORE_READ(sk, __sk_common.skc_family) == AF_INET6)
+        return 0;
     account(sk, ret, 0);
     return 0;
 }
