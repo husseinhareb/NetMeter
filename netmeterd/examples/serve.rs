@@ -30,6 +30,7 @@ fn main() {
         db.into(),
         netmeter_lib::core::time::system_timezone(),
         status,
+        Default::default(),
         None,
     )
     .run()

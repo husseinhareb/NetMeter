@@ -69,6 +69,15 @@ pub fn live() -> Option<ipc::LiveSnapshot> {
     }
 }
 
+/// The helper's last per-application sample, or `None` without a helper (or
+/// with one too old to answer).
+pub fn live_apps() -> Option<ipc::LiveApps> {
+    match ask(&Request::LiveApps) {
+        Ok(Response::LiveApps(l)) => Some(l),
+        _ => None,
+    }
+}
+
 /// No socket file, or nothing accepting on it. Both mean "not installed"
 /// rather than "broken", and the GUI shows an invitation instead of an error.
 fn is_absent(e: &io::Error) -> bool {

@@ -61,7 +61,11 @@ struct Row {
 ///
 /// `uid` comes from the connection's peer credentials. It is the only thing
 /// restricting what a caller can see, so it is applied in the SQL rather than
-/// filtered afterwards.
+/// filtered afterwards. A caller sees its own rows plus system accounts' (root
+/// services, pacman, `nobody`): without them a tunnel daemon's traffic is an
+/// unexplained gap against the interface total. Other human users stay hidden.
+// ponytail: uid < 1000 is the usual SYS_UID_MAX; read /etc/login.defs if a
+// distro ever moves it.
 pub fn app_usage(
     conn: &Connection,
     uid: u32,
@@ -103,14 +107,11 @@ pub fn app_usage(
         total.tx_bytes += row.tx;
     }
 
-    // Overhead is stored per day, so it is only placed in day-or-wider
-    // buckets. Splitting a day's headers across its hours would be inventing
-    // a distribution nobody measured.
-    let overhead_by_bucket = if granularity == Granularity::Hour {
-        HashMap::new()
-    } else {
-        overhead_rows(conn, granularity, &from_period, &to_period)?
-    };
+    // Overhead is stored per day. An hourly range still gets the days' total,
+    // or the GUI reads the headers as unattributed traffic, but no hour bucket
+    // does: the rows come back keyed by day, which no hour key matches, and
+    // splitting a day across its hours would invent a distribution.
+    let overhead_by_bucket = overhead_rows(conn, granularity, &from_period, &to_period)?;
     let mut overhead_total = Traffic::default();
     for t in overhead_by_bucket.values() {
         overhead_total.rx_bytes += t.rx_bytes;
@@ -140,7 +141,13 @@ pub fn app_usage(
     })
 }
 
-fn sorted(map: HashMap<String, Traffic>) -> Vec<AppTraffic> {
+/// Whether `caller` may see a row recorded for `uid`: its own, or a system
+/// account's. The SQL in this file states the same rule.
+pub fn visible(caller: u32, uid: u32) -> bool {
+    uid == caller || uid < 1000 || uid == 65534
+}
+
+pub fn sorted(map: HashMap<String, Traffic>) -> Vec<AppTraffic> {
     let mut out: Vec<AppTraffic> = map
         .into_iter()
         .map(|(app, t)| AppTraffic {
@@ -180,7 +187,7 @@ fn daily_rows(
         .prepare(
             "SELECT substr(d.local_date, 1, ?1), a.app_key, d.rx_bytes, d.tx_bytes
                FROM usage_app_day d JOIN apps a ON a.id = d.app_id
-              WHERE d.uid = ?2 AND d.local_date >= ?3 AND d.local_date <= ?4",
+              WHERE (d.uid = ?2 OR d.uid < 1000 OR d.uid = 65534) AND d.local_date >= ?3 AND d.local_date <= ?4",
         )
         .map_err(StorageError::from_sqlite)?;
     let rows = stmt
@@ -211,7 +218,7 @@ fn hourly_rows(
         .prepare(
             "SELECT h.hour_start_utc_ms, a.app_key, h.rx_bytes, h.tx_bytes
                FROM usage_app_hour h JOIN apps a ON a.id = h.app_id
-              WHERE h.uid = ?1 AND h.hour_start_utc_ms >= ?2 AND h.hour_start_utc_ms < ?3",
+              WHERE (h.uid = ?1 OR h.uid < 1000 OR h.uid = 65534) AND h.hour_start_utc_ms >= ?2 AND h.hour_start_utc_ms < ?3",
         )
         .map_err(StorageError::from_sqlite)?;
     let rows = stmt

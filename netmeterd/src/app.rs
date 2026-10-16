@@ -162,7 +162,8 @@ fn cmdline(tgid: u32) -> Vec<String> {
 /// `/proc/pid/cmdline` is documented as NUL-separated, but Electron and
 /// Chrome rewrite their own argv into a single space-separated blob, so
 /// Obsidian arrived as one argument and its app path was never seen. Handle
-/// both shapes.
+/// both shapes. A Wine program's single argument is a Windows path, whose
+/// spaces are part of the name: splitting it gave "S:\steamapps\common\The".
 pub fn split_cmdline(raw: &[u8]) -> Vec<String> {
     let parts: Vec<String> = raw
         .split(|b| *b == 0)
@@ -171,9 +172,17 @@ pub fn split_cmdline(raw: &[u8]) -> Vec<String> {
         .collect();
 
     match parts.as_slice() {
-        [one] if one.contains(' ') => one.split_whitespace().map(str::to_string).collect(),
+        [one] if one.contains(' ') && !is_windows_path(one) => {
+            one.split_whitespace().map(str::to_string).collect()
+        }
         _ => parts,
     }
+}
+
+/// `C:\...`, as Wine hands a program its own name.
+fn is_windows_path(arg: &str) -> bool {
+    let b = arg.as_bytes();
+    b.len() > 2 && b[0].is_ascii_alphabetic() && b[1] == b':' && b[2] == b'\\'
 }
 
 /// Whether an argument is plausibly a path to the program being run, rather
@@ -312,6 +321,16 @@ mod tests {
         assert_eq!(
             specific_name(Path::new("/usr/lib/electron43/electron"), &args).as_deref(),
             Some("obsidian")
+        );
+    }
+
+    #[test]
+    fn a_wine_programs_path_keeps_its_spaces() {
+        // Observed live: rows called "S:\steamapps\common\The" and "C:\Program".
+        let raw = b"S:\\steamapps\\common\\The Finals\\Discovery.exe\0";
+        assert_eq!(
+            split_cmdline(raw),
+            vec!["S:\\steamapps\\common\\The Finals\\Discovery.exe"]
         );
     }
 

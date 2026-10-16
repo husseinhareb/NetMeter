@@ -1,11 +1,13 @@
 //! The local socket the GUI reads through.
 //!
-//! A caller only ever sees its own uid's rows, and that uid comes from
-//! `SO_PEERCRED` on the connection -- the kernel's word, not the client's. It
-//! is the whole access-control story here, which is why it is applied in SQL
-//! rather than filtered after the fact.
+//! A caller sees its own uid's rows plus system accounts', never another human
+//! user's, and that uid comes from `SO_PEERCRED` on the connection -- the
+//! kernel's word, not the client's. It is the whole access-control story here,
+//! which is why it is applied in SQL rather than filtered after the fact.
 
-use netmeter_lib::api::ipc::{read_frame, write_frame, DaemonStatus, LiveSnapshot, Request, Response};
+use netmeter_lib::api::ipc::{
+    read_frame, write_frame, DaemonStatus, LiveApps, LiveSnapshot, Request, Response, Traffic,
+};
 use netmeter_lib::monitor::EngineShared;
 use netmeter_lib::storage::database;
 use std::io;
@@ -23,11 +25,23 @@ const IO_TIMEOUT: Duration = Duration::from_secs(10);
 /// What the daemon publishes about itself, updated by the sampling loop.
 pub type SharedStatus = Arc<Mutex<DaemonStatus>>;
 
+/// The sampling loop's most recent tick, kept per uid so each caller can be
+/// shown only what `query::visible` allows.
+#[derive(Debug, Default)]
+pub struct LastTick {
+    pub interval_ms: u64,
+    pub sampled_at_utc_ms: i64,
+    pub apps: Vec<(u32, String, Traffic)>,
+}
+
+pub type SharedTick = Arc<Mutex<LastTick>>;
+
 pub struct Server {
     path: PathBuf,
     db: PathBuf,
     timezone: chrono_tz::Tz,
     status: SharedStatus,
+    tick: SharedTick,
     /// The interface engine, when it started.
     engine: Option<Arc<EngineShared>>,
 }
@@ -38,6 +52,7 @@ impl Server {
         db: PathBuf,
         timezone: chrono_tz::Tz,
         status: SharedStatus,
+        tick: SharedTick,
         engine: Option<Arc<EngineShared>>,
     ) -> Self {
         Self {
@@ -45,6 +60,7 @@ impl Server {
             db,
             timezone,
             status,
+            tick,
             engine,
         }
     }
@@ -52,9 +68,8 @@ impl Server {
     /// Bind and serve until the process ends.
     ///
     /// The socket is world read/write on purpose: peer-uid filtering means a
-    /// caller can only reach its own data, so a group would add install
-    /// friction without adding protection. Root's rows -- system services --
-    /// are visible only to root, which is the same rule applied to uid 0.
+    /// caller can only reach its own data and system services', so a group
+    /// would add install friction without adding protection.
     pub fn run(self) -> io::Result<()> {
         if let Some(dir) = self.path.parent() {
             std::fs::create_dir_all(dir)?;
@@ -81,11 +96,12 @@ impl Server {
                     let db = self.db.clone();
                     let tz = self.timezone;
                     let status = Arc::clone(&self.status);
+                    let tick = Arc::clone(&self.tick);
                     let engine = self.engine.clone();
                     // A thread per connection: these are short, infrequent
                     // and few -- one desktop GUI, occasionally a CLI.
                     std::thread::spawn(move || {
-                        if let Err(e) = handle(stream, &db, tz, &status, engine.as_deref()) {
+                        if let Err(e) = handle(stream, &db, tz, &status, &tick, engine.as_deref()) {
                             tracing::debug!(error = %e, "connection ended");
                         }
                     });
@@ -102,6 +118,7 @@ fn handle(
     db: &Path,
     timezone: chrono_tz::Tz,
     status: &SharedStatus,
+    tick: &SharedTick,
     engine: Option<&EngineShared>,
 ) -> io::Result<()> {
     stream.set_read_timeout(Some(IO_TIMEOUT))?;
@@ -111,7 +128,7 @@ fn handle(
     // One request per connection. Nothing here needs a session, and a
     // connection that cannot outlive its answer cannot leak one.
     let request: Request = read_frame(&mut stream)?;
-    let response = answer(request, db, uid, timezone, status, engine);
+    let response = answer(request, db, uid, timezone, status, tick, engine);
     write_frame(&mut stream, &response)
 }
 
@@ -121,9 +138,27 @@ fn answer(
     uid: u32,
     timezone: chrono_tz::Tz,
     status: &SharedStatus,
+    tick: &SharedTick,
     engine: Option<&EngineShared>,
 ) -> Response {
     match request {
+        Request::LiveApps => {
+            let t = tick.lock().unwrap_or_else(|e| e.into_inner());
+            // Merged by name: root's and this user's curl are one row.
+            let mut by_app: std::collections::HashMap<String, Traffic> = Default::default();
+            for (owner, app, traffic) in &t.apps {
+                if query::visible(uid, *owner) {
+                    let slot = by_app.entry(app.clone()).or_default();
+                    slot.rx_bytes += traffic.rx_bytes;
+                    slot.tx_bytes += traffic.tx_bytes;
+                }
+            }
+            Response::LiveApps(LiveApps {
+                interval_ms: t.interval_ms,
+                sampled_at_utc_ms: t.sampled_at_utc_ms,
+                apps: query::sorted(by_app),
+            })
+        }
         Request::Status => match status.lock() {
             Ok(s) => Response::Status(s.clone()),
             // Poisoned means a previous holder panicked; the contents are

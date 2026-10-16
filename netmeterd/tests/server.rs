@@ -6,7 +6,7 @@ use netmeter_lib::core::types::{Granularity, InterfaceKind, Traffic};
 use netmeter_lib::monitor::engine::SeenInterface;
 use netmeter_lib::monitor::sampling::BucketKey as InterfaceBucket;
 use netmeter_lib::monitor::EngineShared;
-use netmeterd::server::{Server, SharedStatus};
+use netmeterd::server::{LastTick, Server, SharedStatus, SharedTick};
 use netmeterd::store::{Batch, BucketKey, Store};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
@@ -32,8 +32,8 @@ fn status() -> SharedStatus {
     }))
 }
 
-/// A store seeded with two applications for this uid and one for a different
-/// one, plus a day of overhead.
+/// A store seeded with two applications for this uid, one for another human
+/// user, one for a system service, plus a day of overhead.
 fn seeded(dir: &TempDir) -> (PathBuf, String) {
     let db = dir.path().join("apps.db");
     let (mut store, _) = Store::open(&db).expect("open");
@@ -43,7 +43,8 @@ fn seeded(dir: &TempDir) -> (PathBuf, String) {
     for (app, rx, tx, uid) in [
         ("firefox", 5_000_000u64, 200_000u64, me()),
         ("spotify", 1_000_000, 50_000, me()),
-        ("someone-elses-app", 9_000_000, 9_000_000, me() + 1),
+        ("someone-elses-app", 9_000_000, 9_000_000, me().max(1000) + 1),
+        ("cloudflared", 2_000_000, 0, 0),
     ] {
         batch.add(
             BucketKey {
@@ -75,16 +76,21 @@ fn ask(socket: &PathBuf, request: &Request) -> Response {
 }
 
 fn serve(db: PathBuf, socket: PathBuf) {
-    serve_with(db, socket, None);
+    serve_with(db, socket, None, Default::default());
 }
 
-fn serve_with(db: PathBuf, socket: PathBuf, engine: Option<Arc<EngineShared>>) {
-    let server = Server::new(socket, db, chrono_tz::UTC, status(), engine);
+fn serve_with(
+    db: PathBuf,
+    socket: PathBuf,
+    engine: Option<Arc<EngineShared>>,
+    tick: SharedTick,
+) {
+    let server = Server::new(socket, db, chrono_tz::UTC, status(), tick, engine);
     std::thread::spawn(move || server.run().expect("serve"));
 }
 
 #[test]
-fn a_client_gets_its_own_rows_and_not_another_uids() {
+fn a_client_gets_its_own_and_system_rows_but_not_another_users() {
     let dir = TempDir::new().expect("dir");
     let (db, today) = seeded(&dir);
     let socket = dir.path().join("sock");
@@ -104,10 +110,10 @@ fn a_client_gets_its_own_rows_and_not_another_uids() {
     };
     assert_eq!(usage.uid, me());
     let names: Vec<&str> = usage.total.iter().map(|a| a.app.as_str()).collect();
-    assert_eq!(names, ["firefox", "spotify"], "largest first, own uid only");
+    assert_eq!(names, ["firefox", "cloudflared", "spotify"], "largest first, own and system uids");
     assert!(
         !names.contains(&"someone-elses-app"),
-        "another uid's rows must never be served"
+        "another user's rows must never be served"
     );
     assert_eq!(usage.total[0].rx_bytes, 5_000_000);
     assert_eq!(usage.overhead.rx_bytes, 300_000);
@@ -141,7 +147,7 @@ fn the_series_is_dense_so_an_idle_day_is_a_zero_not_a_gap() {
         .iter()
         .find(|b| b.key == today)
         .expect("today present");
-    assert_eq!(today_bucket.apps.len(), 2);
+    assert_eq!(today_bucket.apps.len(), 3);
     assert!(usage
         .buckets
         .iter()
@@ -171,6 +177,10 @@ fn hour_buckets_carry_no_overhead_rather_than_a_made_up_share() {
     assert!(
         usage.buckets.iter().all(|b| b.overhead.rx_bytes == 0),
         "overhead is measured per day; splitting it over hours would invent one"
+    );
+    assert_eq!(
+        usage.overhead.rx_bytes, 300_000,
+        "the range total still carries the day's overhead"
     );
     assert_eq!(
         usage.buckets.iter().filter(|b| !b.apps.is_empty()).count(),
@@ -262,7 +272,12 @@ fn live_serves_the_interface_engines_unflushed_state() {
             },
         );
     }
-    serve_with(dir.path().join("absent.db"), socket.clone(), Some(shared));
+    serve_with(
+        dir.path().join("absent.db"),
+        socket.clone(),
+        Some(shared),
+        Default::default(),
+    );
 
     let Response::Live(snap) = ask(&socket, &Request::Live) else {
         panic!("expected a live snapshot");
@@ -283,4 +298,30 @@ fn live_without_an_engine_is_an_error_so_the_gui_samples_for_itself() {
         Response::Error { kind, .. } => assert_eq!(kind, "unavailable"),
         other => panic!("expected an error, got {other:?}"),
     }
+}
+
+#[test]
+fn live_apps_follow_the_same_uid_rule_and_merge_by_name() {
+    use netmeter_lib::api::ipc::Traffic as T;
+    let dir = TempDir::new().expect("dir");
+    let socket = dir.path().join("sock");
+    let other = me().max(1000) + 1;
+    let tick = Arc::new(Mutex::new(LastTick {
+        interval_ms: 5_000,
+        sampled_at_utc_ms: NOW,
+        apps: vec![
+            (me(), "curl".into(), T { rx_bytes: 100, tx_bytes: 0 }),
+            (0, "curl".into(), T { rx_bytes: 50, tx_bytes: 0 }),
+            (0, "cloudflared".into(), T { rx_bytes: 500, tx_bytes: 20 }),
+            (other, "someone-elses-app".into(), T { rx_bytes: 9_000, tx_bytes: 0 }),
+        ],
+    }));
+    serve_with(dir.path().join("absent.db"), socket.clone(), None, tick);
+
+    let Response::LiveApps(live) = ask(&socket, &Request::LiveApps) else {
+        panic!("expected live apps");
+    };
+    assert_eq!(live.interval_ms, 5_000);
+    let got: Vec<(&str, u64)> = live.apps.iter().map(|a| (a.app.as_str(), a.rx_bytes)).collect();
+    assert_eq!(got, [("cloudflared", 500), ("curl", 150)]);
 }

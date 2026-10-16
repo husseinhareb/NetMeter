@@ -43,6 +43,8 @@ pub enum Request {
     /// The interface sampler's in-memory state: what the database does not
     /// hold yet.
     Live,
+    /// What each application moved in the helper's most recent sample.
+    LiveApps,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -51,7 +53,19 @@ pub enum Response {
     AppUsage(AppUsage),
     Status(DaemonStatus),
     Live(Box<LiveSnapshot>),
+    LiveApps(LiveApps),
     Error { kind: String, message: String },
+}
+
+/// The helper's last sample, per application, under the same uid rule as
+/// `AppUsage`. Bytes over `interval_ms`, not a rate: the GUI divides, so a
+/// late or short tick reads as what it was.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct LiveApps {
+    pub interval_ms: u64,
+    pub sampled_at_utc_ms: i64,
+    /// Applications that moved anything, largest first.
+    pub apps: Vec<AppTraffic>,
 }
 
 /// The daemon's interface engine, as of the moment of asking.

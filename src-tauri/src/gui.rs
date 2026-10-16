@@ -156,6 +156,7 @@ pub fn run() {
             crate::api::commands::set_config,
             crate::api::commands::get_helper_state,
             crate::api::commands::get_app_usage,
+            crate::api::commands::get_live_apps,
             crate::api::commands::get_autostart,
             crate::api::commands::set_autostart,
             crate::api::commands::can_install_helper,

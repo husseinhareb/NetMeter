@@ -47,6 +47,15 @@ struct sock {
     struct sock_common __sk_common;
 } __attribute__((preserve_access_index));
 
+// The thread group leader is the process; its comm is the process name. The
+// current task's own comm is the thread's, which named applications after
+// their worker threads ("Bun Pool 0", "tokio-rt-worker") whenever the process
+// exited before userspace could look it up.
+struct task_struct {
+    struct task_struct *group_leader;
+    char comm[TASK_COMM_LEN];
+} __attribute__((preserve_access_index));
+
 struct key {
     __u32 tgid;
     __u32 uid;
@@ -58,8 +67,9 @@ struct value {
     char comm[TASK_COMM_LEN];
 };
 
-// Userspace drains and deletes this every tick. `comm` is recorded on first
-// sight so a process that exits before the next drain can still be named.
+// Userspace drains and deletes this every tick. The process's `comm` is
+// recorded on first sight so one that exits before the next drain can still
+// be named.
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 16384);
@@ -153,7 +163,8 @@ static __always_inline void account(struct sock *sk, long bytes, int is_rx) {
         init.rx_bytes = bytes;
     else
         init.tx_bytes = bytes;
-    bpf_get_current_comm(&init.comm, sizeof(init.comm));
+    struct task_struct *task = (struct task_struct *)bpf_get_current_task();
+    BPF_CORE_READ_STR_INTO(&init.comm, task, group_leader, comm);
 
     if (bpf_map_update_elem(&counters, &k, &init, BPF_NOEXIST)) {
         // Either the map is full, or another CPU created this key between our

@@ -344,6 +344,15 @@ pub async fn get_helper_state() -> crate::api::helper::HelperState {
         })
 }
 
+/// What each application is moving right now, from the helper's last sample.
+#[tauri::command]
+pub async fn get_live_apps() -> Option<crate::api::ipc::LiveApps> {
+    tauri::async_runtime::spawn_blocking(crate::api::helper::live_apps)
+        .await
+        .ok()
+        .flatten()
+}
+
 /// Per-application usage, from the helper rather than the local database.
 ///
 /// The frontend never opens the helper's socket itself, for the same reason it

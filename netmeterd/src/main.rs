@@ -17,7 +17,7 @@ use netmeter_lib::api::ipc::{self, DaemonStatus};
 use netmeter_lib::core::config::Config;
 use netmeter_lib::monitor::{Engine, EngineConfig, LinuxNetworkStatsProvider};
 use netmeter_lib::storage::SqliteRepository;
-use netmeterd::server::Server;
+use netmeterd::server::{Server, SharedTick};
 use netmeterd::store::{Batch, BucketKey, Retention, Store};
 use std::sync::{Arc, Mutex};
 
@@ -172,6 +172,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         s.interface_db = Some(interface_db.display().to_string());
     }
 
+    let tick: SharedTick = Default::default();
+
     let socket_path = std::env::var_os("NETMETERD_SOCKET")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(ipc::SOCKET_PATH));
@@ -181,6 +183,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             db_path.clone(),
             timezone,
             Arc::clone(&status),
+            Arc::clone(&tick),
             engine.as_ref().map(|e| e.shared()),
         );
         // Its own thread with its own read-only connections, so a slow client
@@ -203,12 +206,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // clamped away below, so without a running total it leaves no trace.
     let mut session_excess = (0u64, 0u64);
     let mut warned_excess = false;
+    // Last tick's shortfall, for `settle`.
+    let mut carry = (0u64, 0u64);
     let mut last_flush = Instant::now();
     let mut last_prune_date = store.meta("last_prune_date")?;
     let started = Instant::now();
+    let mut last_tick = Instant::now();
 
     loop {
         std::thread::sleep(interval);
+        let tick_ms = last_tick.elapsed().as_millis() as u64;
+        last_tick = Instant::now();
         let now = time::now_utc_ms();
         let hour = time::hour_start_ms(now);
         let local_date = time::local_date_key(timezone, now);
@@ -238,6 +246,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         let mut tick_attributed = (0u64, 0u64);
+        let mut tick_apps: HashMap<(u32, String), ipc::Traffic> = HashMap::new();
         for s in samples {
             // Resolved now, while the process is probably still alive: after
             // it exits only `comm` is left.
@@ -250,6 +259,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let slot = session.entry(key.clone()).or_insert((0, 0));
             slot.0 += s.rx;
             slot.1 += s.tx;
+            let live = tick_apps.entry((s.uid, key.clone())).or_default();
+            live.rx_bytes += s.rx;
+            live.tx_bytes += s.tx;
             batch.add(
                 BucketKey {
                     hour_start_utc_ms: hour,
@@ -263,6 +275,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         session_attributed.0 += tick_attributed.0;
         session_attributed.1 += tick_attributed.1;
+        if let Ok(mut t) = tick.lock() {
+            t.interval_ms = tick_ms;
+            t.sampled_at_utc_ms = now;
+            t.apps = tick_apps
+                .into_iter()
+                .map(|((uid, app), v)| (uid, app, v))
+                .collect();
+        }
 
         // Protocol overhead: what the interfaces moved that no application
         // owns. Headers and acknowledgements, measured rather than modelled.
@@ -279,18 +299,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         session_wire.0 += wire.0;
         session_wire.1 += wire.1;
 
-        // Clamped, not signed: within one tick the two measurements are taken
-        // moments apart, so a small negative is skew rather than a finding.
-        let overhead = (
-            wire.0.saturating_sub(tick_attributed.0),
-            wire.1.saturating_sub(tick_attributed.1),
-        );
+        let (overhead_rx, excess_rx) = settle(wire.0, tick_attributed.0, &mut carry.0);
+        let (overhead_tx, excess_tx) = settle(wire.1, tick_attributed.1, &mut carry.1);
+        let overhead = (overhead_rx, overhead_tx);
 
-        // The other side of that clamp. Skew cancels out over a session; a
-        // systematic overcount does not, and it used to floor at zero here
+        // What `settle` could not match even a tick later. Skew cancels out;
+        // a systematic overcount does not, and it used to floor at zero here
         // and reach the GUI as a per-app total larger than the machine's own.
-        session_excess.0 += tick_attributed.0.saturating_sub(wire.0);
-        session_excess.1 += tick_attributed.1.saturating_sub(wire.1);
+        session_excess.0 += excess_rx;
+        session_excess.1 += excess_tx;
         if !warned_excess && session_excess.0 + session_excess.1 > EXCESS_WARN_BYTES {
             warned_excess = true;
             tracing::warn!(
@@ -343,6 +360,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
     }
+}
+
+/// Splits one direction of a tick into protocol overhead and excess, returning
+/// `(overhead, excess)`.
+///
+/// The probes count a send when the application makes it and the interface
+/// counters when the NIC does, so a burst near a tick boundary is attributed in
+/// one tick and reaches the wire in the next. Flooring each tick at zero threw
+/// the first half away and then counted the same bytes again as overhead. So a
+/// tick's shortfall is
+/// carried into the next one, and only that far: anything still unmatched after
+/// one tick is not skew, and is reported as excess rather than allowed to eat
+/// real overhead.
+fn settle(wire: u64, attributed: u64, carry: &mut u64) -> (u64, u64) {
+    let owed = attributed + *carry;
+    let overhead = wire.saturating_sub(owed);
+    let unmatched = owed.saturating_sub(wire);
+    *carry = attributed.saturating_sub(wire);
+    (overhead, unmatched - *carry)
 }
 
 /// The GUI's interface sampler, hosted here so it runs whether or not anyone
@@ -487,5 +523,28 @@ fn report(
             bytes(drops.0),
             bytes(drops.1)
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::settle;
+
+    #[test]
+    fn skew_across_a_tick_boundary_is_not_overhead() {
+        let mut carry = 0;
+        // 100 bytes sent late in a tick, on the wire early in the next.
+        assert_eq!(settle(20, 100, &mut carry), (0, 0));
+        assert_eq!(settle(110, 10, &mut carry), (20, 0));
+        // Over both ticks: 130 on the wire, 110 attributed, 20 overhead.
+    }
+
+    #[test]
+    fn a_shortfall_is_carried_one_tick_only() {
+        let mut carry = 0;
+        // A VPN's payload counted twice never reaches the wire to be matched.
+        assert_eq!(settle(0, 50, &mut carry), (0, 0));
+        assert_eq!(settle(30, 30, &mut carry), (0, 50));
+        assert_eq!(settle(40, 30, &mut carry), (10, 0));
     }
 }
