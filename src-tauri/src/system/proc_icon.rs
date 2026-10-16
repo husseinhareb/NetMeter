@@ -6,6 +6,7 @@ use std::sync::{Mutex, OnceLock};
 
 static ICON_CACHE: OnceLock<Mutex<HashMap<String, Option<String>>>> = OnceLock::new();
 static ICON_INDEX: OnceLock<IconIndex> = OnceLock::new();
+static STEAM_INDEX: OnceLock<SteamIndex> = OnceLock::new();
 
 #[derive(Default)]
 struct IconIndex {
@@ -41,6 +42,10 @@ pub fn get_process_icon(name: &str) -> Option<String> {
 }
 
 fn resolve_icon(process_name: &str) -> Option<String> {
+    if let Some(icon) = steam_game_icon(process_name) {
+        return Some(icon);
+    }
+
     let index = icon_index();
 
     let icon_name = name_candidates(process_name)
@@ -67,6 +72,112 @@ fn resolve_icon(process_name: &str) -> Option<String> {
 
     let icon_path = index.icon_name_to_path.get(&icon_name)?;
     read_as_data_url(icon_path)
+}
+
+#[derive(Default)]
+struct SteamIndex {
+    /// Steam install roots, each holding an `appcache/librarycache`.
+    roots: Vec<PathBuf>,
+    /// Lowercased `installdir` from every library's manifests, to its appid.
+    installdirs: HashMap<String, String>,
+}
+
+/// Proton games are named by their Windows exe path
+/// (`s:\steamapps\common\peak\peak.exe`), sometimes cut short mid-folder. The
+/// folder after `common` is the game's `installdir`, the manifests map that to an
+/// appid, and Steam keeps an icon per appid.
+fn steam_game_icon(process_name: &str) -> Option<String> {
+    let (_, rest) = process_name.split_once("steamapps")?;
+    let rest = rest
+        .trim_start_matches(['\\', '/'])
+        .strip_prefix("common")?;
+    let dir = rest
+        .trim_start_matches(['\\', '/'])
+        .split(['\\', '/'])
+        .next()?;
+    if dir.is_empty() {
+        return None;
+    }
+
+    let steam = STEAM_INDEX.get_or_init(build_steam_index);
+    let appid = steam.installdirs.get(dir).or_else(|| {
+        let mut prefixed = steam.installdirs.iter().filter(|(d, _)| d.starts_with(dir));
+        let only = prefixed.next()?;
+        prefixed.next().is_none().then_some(only.1)
+    })?;
+
+    // The desktop shortcut's icon is larger; the library cache has every game
+    // Steam has shown, as a 32px jpg named by its hash.
+    if let Some(path) = icon_index()
+        .icon_name_to_path
+        .get(&format!("steam_icon_{appid}"))
+    {
+        return read_as_data_url(path);
+    }
+    steam.roots.iter().find_map(|root| {
+        fs::read_dir(root.join("appcache/librarycache").join(appid))
+            .ok()?
+            .flatten()
+            .map(|entry| entry.path())
+            .find(|path| {
+                path.file_stem()
+                    .and_then(|v| v.to_str())
+                    .is_some_and(|stem| {
+                        stem.len() == 40 && stem.bytes().all(|b| b.is_ascii_hexdigit())
+                    })
+                    && path.extension().is_some_and(|ext| ext == "jpg")
+            })
+            .and_then(|path| read_as_data_url(&path))
+    })
+}
+
+fn build_steam_index() -> SteamIndex {
+    let Ok(home) = std::env::var("HOME") else {
+        return SteamIndex::default();
+    };
+    let roots: Vec<PathBuf> = [
+        ".local/share/Steam",
+        ".var/app/com.valvesoftware.Steam/.local/share/Steam",
+    ]
+    .iter()
+    .map(|dir| PathBuf::from(&home).join(dir))
+    .filter(|root| root.is_dir())
+    .collect();
+
+    let mut installdirs = HashMap::new();
+    for root in &roots {
+        let vdf = fs::read_to_string(root.join("steamapps/libraryfolders.vdf")).unwrap_or_default();
+        let libraries = vdf.lines().filter_map(|line| vdf_value(line, "path"));
+        for library in libraries.map(PathBuf::from).chain([root.clone()]) {
+            let Ok(entries) = fs::read_dir(library.join("steamapps")) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                if !(name.starts_with("appmanifest_") && name.ends_with(".acf")) {
+                    continue;
+                }
+                let acf = fs::read_to_string(entry.path()).unwrap_or_default();
+                let appid = acf.lines().find_map(|line| vdf_value(line, "appid"));
+                let dir = acf.lines().find_map(|line| vdf_value(line, "installdir"));
+                if let (Some(appid), Some(dir)) = (appid, dir) {
+                    installdirs.insert(dir.to_lowercase(), appid);
+                }
+            }
+        }
+    }
+
+    SteamIndex { roots, installdirs }
+}
+
+/// The value of a `"key"  "value"` line in Valve's KeyValues text format.
+fn vdf_value(line: &str, key: &str) -> Option<String> {
+    let mut parts = line
+        .trim()
+        .split('"')
+        .filter(|part| !part.trim().is_empty());
+    (parts.next()? == key).then(|| parts.next().map(str::to_string))?
 }
 
 /// Names to try, most specific first: the process name, its trailing component for
@@ -435,6 +546,16 @@ Exec=env BAM=1 /usr/lib/chromium/chromium --some-flag
             ["org.mozilla.firefox", "firefox"]
         );
         assert_eq!(name_candidates("firefox"), ["firefox"]);
+    }
+
+    #[test]
+    fn reads_valve_key_values() {
+        assert_eq!(
+            vdf_value("\t\t\"installdir\"\t\t\"The Finals\"", "installdir"),
+            Some("The Finals".into())
+        );
+        assert_eq!(vdf_value("\t\"appid\"\t\"730\"", "installdir"), None);
+        assert_eq!(vdf_value("\t{", "appid"), None);
     }
 
     #[test]
