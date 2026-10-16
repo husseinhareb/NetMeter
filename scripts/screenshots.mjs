@@ -7,7 +7,9 @@
 // /var/lib/netmeter, read here with node:sqlite, so any range the UI asks for
 // gets real numbers. Driven over the DevTools protocol; no npm dependencies.
 //
-// Usage: npm run screenshots [-- --sizes 390x844,1280x800] [--out dir]
+// Usage: npm run screenshots [-- --sizes 390x844,1280x800] [--out dir] [--readme]
+//   --readme  the curated README shots instead: 1280x800 at 2x, framed, as WebP
+//             into docs/screenshots/, without personal scripts or thread rows
 //
 // Fonts and scrollbars differ slightly from WebKitGTK, the real webview.
 
@@ -24,7 +26,8 @@ const option = (name, fallback) => {
   const i = argv.indexOf(name);
   return i === -1 ? fallback : argv[i + 1];
 };
-const outDir = option("--out", join(root, "screenshots"));
+const README = argv.includes("--readme");
+const outDir = option("--out", join(root, README ? "docs/screenshots" : "screenshots"));
 const SIZES = option("--sizes", "390x844,800x700,1280x800,1920x1080,2560x1440")
   .split(",")
   .map((s) => s.split("x").map(Number));
@@ -45,6 +48,14 @@ function rows(file, sql) {
 
 const me = process.getuid();
 const visible = `(uid = ${me} OR uid < 1000 OR uid = 65534)`;
+// README shots are public: leave out personal scripts (an interpreter running
+// a file) and rows with no program path, which are threads and test runs.
+const personal = new Set(
+  rows("apps.db", "SELECT app_key, exe_path FROM apps")
+    .filter((a) => README && (!a.exe_path || /(^|\/)(python[\d.]*|node)$|\.venv\//.test(a.exe_path)))
+    .map((a) => a.app_key),
+);
+const shown = (r) => !personal.has(r.app);
 const config = JSON.parse(
   readFileSync(join(process.env.HOME, ".config/com.shtam.netmeter/config.json"), "utf8"),
 );
@@ -60,14 +71,25 @@ const fixtures = {
     "apps.db",
     `SELECT d.local_date, a.app_key AS app, d.rx_bytes, d.tx_bytes
        FROM usage_app_day d JOIN apps a ON a.id = d.app_id WHERE ${visible.replaceAll("uid", "d.uid")}`,
-  ),
+  ).filter(shown),
   appHour: rows(
     "apps.db",
     `SELECT h.hour_start_utc_ms, a.app_key AS app, h.rx_bytes, h.tx_bytes
        FROM usage_app_hour h JOIN apps a ON a.id = h.app_id WHERE ${visible.replaceAll("uid", "h.uid")}`,
-  ),
+  ).filter(shown),
   overhead: rows("apps.db", "SELECT local_date, rx_bytes, tx_bytes FROM overhead_day"),
 };
+
+// The icons the app would show, from its own lookup.
+const names = [...new Set(fixtures.appDay.map((r) => r.app))].join("\n");
+const icons = spawnSync("cargo", ["run", "--quiet", "--example", "icons"], {
+  cwd: join(root, "src-tauri"),
+  input: names,
+  maxBuffer: 256 << 20,
+  stdio: ["pipe", "pipe", "inherit"],
+});
+if (icons.status !== 0) process.exit(icons.status ?? 1);
+fixtures.icons = JSON.parse(icons.stdout);
 
 // Runs in the page: answers each command the way the backend would, from the
 // rows above. Approximate where exactness does not change the layout.
@@ -201,7 +223,7 @@ const pageSetup = `(() => {
         case "get_live_apps": return helperState === "running" ? liveApps() : null;
         case "get_autostart": return true;
         case "can_install_helper": return true;
-        case "get_process_icon": return null;
+        case "get_process_icon": return FIX.icons[args.name] ?? null;
         case "plugin:event|listen": listeners.push({ event: args.event, id: args.handler }); return listeners.length;
         case "plugin:notification|is_permission_granted": return true;
         default: return null;
@@ -268,7 +290,14 @@ process.on("exit", () => {
 });
 const browser = spawn(
   browserBin,
-  ["--headless=new", "--disable-gpu", "--no-first-run", `--user-data-dir=${profile}`, "--remote-debugging-port=0", "about:blank"],
+  [
+    "--headless=new",
+    "--disable-gpu",
+    "--no-first-run",
+    `--user-data-dir=${profile}`,
+    "--remote-debugging-port=0",
+    "about:blank",
+  ],
   { stdio: ["ignore", "ignore", "pipe"] },
 );
 children.push(browser);
@@ -310,10 +339,19 @@ ws.addEventListener("message", ({ data }) => {
     console.warn("  page error:", msg.params.exceptionDetails.exception?.description ?? msg.params.exceptionDetails.text);
   }
 });
+// Timed out rather than awaited forever: a call Chromium never answers once
+// left a run hanging for hours.
 const cdp = (method, params = {}, sessionId) =>
   new Promise((resolve, reject) => {
     const id = ++msgId;
-    pending.set(id, { resolve, reject });
+    const timer = setTimeout(() => {
+      pending.delete(id);
+      reject(new Error(`${method} timed out`));
+    }, 30000);
+    pending.set(id, {
+      resolve: (v) => (clearTimeout(timer), resolve(v)),
+      reject: (e) => (clearTimeout(timer), reject(e)),
+    });
     ws.send(JSON.stringify({ id, method, params, sessionId }));
   });
 
@@ -333,7 +371,7 @@ const evaluate = async (expression) => {
 // ── Steps ─────────────────────────────────────────────────────────────────
 
 mkdirSync(outDir, { recursive: true });
-for (const f of readdirSync(outDir)) if (f.endsWith(".png")) rmSync(join(outDir, f));
+for (const f of readdirSync(outDir)) if (/\.(png|webp)$/.test(f)) rmSync(join(outDir, f));
 
 const slug = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 const problems = [];
@@ -364,6 +402,68 @@ const click = async (text) => {
   if (!(await evaluate(`__ui.click(${JSON.stringify(text)})`))) console.warn(`  skip: "${text}" not found`);
   await sleep(600);
 };
+
+if (README) {
+  // Each shot is composited onto a backdrop for its theme, with rounded
+  // corners and a shadow, as hw-monitor's README does.
+  const BACKDROPS = {
+    light: "linear-gradient(135deg, #a1c4fd, #c2e9fb)",
+    dark: "linear-gradient(135deg, #0f2027, #203a43 50%, #2c5364)",
+  };
+  const [W, H, PAD] = [1280, 800, 40];
+  // Its own window: as a second tab it backgrounds the app's tab, which then
+  // stops painting, and a screenshot waits for a frame that never comes.
+  const { targetId: frameTarget } = await cdp("Target.createTarget", { url: "about:blank", newWindow: true });
+  const { sessionId: frameSession } = await cdp("Target.attachToTarget", { targetId: frameTarget, flatten: true });
+  const frame = (method, params) => cdp(method, params, frameSession);
+  await frame("Page.enable");
+  await frame("Emulation.setDeviceMetricsOverride", { width: W + 2 * PAD, height: H + 2 * PAD, deviceScaleFactor: 2, mobile: false });
+  await page("Emulation.setDeviceMetricsOverride", { width: W, height: H, deviceScaleFactor: 2, mobile: false });
+
+  let theme = "light";
+  const themed = (t) => {
+    theme = t;
+    return open(`theme=${t}`);
+  };
+  const save = async (name) => {
+    await evaluate(`document.head.insertAdjacentHTML("beforeend", "<style>::-webkit-scrollbar { display: none }</style>")`);
+    await sleep(800);
+    const { data } = await page("Page.captureScreenshot", { format: "png" });
+    const { frameTree } = await frame("Page.getFrameTree");
+    await frame("Page.setDocumentContent", {
+      frameId: frameTree.frame.id,
+      html: `<body style="margin:0;background:${BACKDROPS[theme]}"><img src="data:image/png;base64,${data}" style="display:block;margin:${PAD}px;width:${W}px;height:${H}px;border-radius:12px;box-shadow:0 18px 50px rgba(0,0,0,.35)"></body>`,
+    });
+    await frame("Runtime.evaluate", { expression: "document.images[0].decode()", awaitPromise: true });
+    const { data: webp } = await frame("Page.captureScreenshot", { format: "webp", quality: 90 });
+    writeFileSync(join(outDir, `${name}.webp`), Buffer.from(webp, "base64"));
+    console.log(`  ${name}.webp (${theme})`);
+  };
+  // The live chart holds 60 seconds of samples.
+  const LIVE = 62000;
+
+  console.log(`README shots at ${W}x${H} @2x into ${outDir} ...`);
+  await themed("light");
+  await sleep(LIVE);
+  await save("overview");
+  await themed("dark");
+  await sleep(LIVE);
+  await save("overview-dark");
+  await themed("light");
+  await click("Applications");
+  await click("30 days");
+  await save("applications");
+  await click("css:.tappable-row");
+  await save("app-timeline");
+  await themed("dark");
+  await click("History");
+  await click("30 days");
+  await save("history");
+  await themed("light");
+  await click("Settings");
+  await save("settings");
+  process.exit(0);
+}
 
 for (const [w, h] of SIZES) {
   size = [w, h];

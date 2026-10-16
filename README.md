@@ -1,8 +1,14 @@
-<p align="center"><img src="assets/icon.svg" width="128" alt="NetMeter icon"></p>
+<div align="center">
+
+<img src="assets/icon.svg" width="96" alt="NetMeter icon">
 
 # NetMeter
 
 NetMeter is a Linux desktop application that measures how much data your computer uses, in total and per application. Built with the Tauri framework, it pairs a Rust backend with a TypeScript/React frontend, and a small system daemon, `netmeterd`, that does the measuring from boot whether or not the window is open. It reads the kernel's own counters and never captures packets or looks at their contents.
+
+<img src="https://github.com/user-attachments/assets/6ebe5046-37be-4c65-9983-7a4e03ded4e2" alt="Overview page with the last 30 days, today and current speed, the applications using the network now, a live bandwidth graph and the network interfaces">
+
+</div>
 
 ## Description
 
@@ -16,12 +22,13 @@ The state of the machine at a glance:
 - **Last 30 days**: download, upload and total
 - **Today**: download, upload and total so far, including traffic not yet written to disk
 - **Current speed**: live download and upload rates
+- **Using the network now**: the applications moving data right now, with their download and upload rates
 - **Live bandwidth**: a graph of the last 60 seconds
 - **Network interfaces**: per-interface download, upload and total for today, with live rates. Interfaces that are recorded but not counted toward your total are dimmed.
 
 ### Applications
 
-Every application that used the network, with its download, upload and total. The list can be filtered by name and sorted by any column, and each application shows its own icon from the installed `.desktop` files.
+Every application that used the network, with its download, upload and total. The list can be filtered by name and sorted by any column. Each application shows its own icon from the installed `.desktop` files, Proton games show theirs from Steam's library, and command-line tools get their project's logo or a glyph for what they are.
 
 Time ranges:
 
@@ -36,9 +43,15 @@ Time ranges:
 
 Clicking an application opens its timeline for the selected range. A **protocol overhead** row shows what the interfaces moved that no application owns (packet headers, acknowledgements, retransmits), so the rows add up to the real total instead of leaving an unexplained gap. The view exports to CSV and JSON.
 
+<img src="https://github.com/user-attachments/assets/e01a549e-3a8b-4fb8-827b-bdf5601f48fd" alt="Applications page for the last 30 days, with the total at the top and each application's download, upload and total">
+
+<img src="https://github.com/user-attachments/assets/2613e723-8113-456e-873b-2f17402e99e8" alt="An application's daily timeline for the last 30 days above the applications table">
+
 ### History
 
 Usage over time for the same ranges as Applications, as a chart and a detail table. Day and month bars can be clicked to drill down into them. Traffic that moved while nothing was counting is reported separately, because nothing says *when* inside that window it happened, and days before NetMeter was installed read "no data" rather than zero. The view exports to CSV and JSON.
+
+<img src="https://github.com/user-attachments/assets/f7505a20-9ea2-41b9-8bb2-e7999a72e3ea" alt="History page in the dark theme with the 30 day total beside a daily chart of download and upload">
 
 ### Settings
 
@@ -46,13 +59,30 @@ Usage over time for the same ranges as Applications, as a chart and a detail tab
 - **Usage limits**: a monthly allowance, with desktop notifications at 80% and 100%
 - **Sampling**: the interval used when the app samples by itself (without the daemon)
 - **Startup**: start at login
-- **Background behavior**: closing the window keeps NetMeter in the tray; Quit from the tray menu
+- **Appearance**: light, dark, or follow the system
+
+Closing the window keeps NetMeter in the tray; Quit is in the tray menu.
+
+<img src="https://github.com/user-attachments/assets/98eb9dc3-f1fe-4f24-a215-a3772671ec65" alt="Settings page with the theme choice and the list of counted interfaces">
+
+### Light and dark
+
+<table>
+  <tr>
+    <td><img src="https://github.com/user-attachments/assets/6ebe5046-37be-4c65-9983-7a4e03ded4e2" alt="Overview in the light theme"></td>
+    <td><img src="https://github.com/user-attachments/assets/2ca30c11-997c-4f38-8378-aa38f89bfb79" alt="Overview in the dark theme"></td>
+  </tr>
+  <tr>
+    <td align="center">Light</td>
+    <td align="center">Dark</td>
+  </tr>
+</table>
 
 ## How it counts
 
 ### The daemon
 
-`netmeterd` runs as a system service from boot. It records interface totals every 5 seconds, and per-application usage through six eBPF probes on the kernel's TCP and UDP send and receive operations. It runs with `CAP_BPF` and `CAP_PERFMON` and nothing else (no setuid binary, no root shell), cannot open a network connection of its own, and serves the app over a local socket that only returns the calling user's own per-application rows.
+`netmeterd` runs as a system service from boot. It records interface totals every 5 seconds, and per-application usage through six eBPF probes on the kernel's TCP and UDP send and receive operations. It runs with `CAP_BPF` and `CAP_PERFMON` and nothing else (no setuid binary, no root shell), cannot open a network connection of its own, and serves the app over a local socket that returns the calling user's own per-application rows and system services', never another user's.
 
 The app only displays what the daemon recorded. Without the daemon, it falls back to sampling interface totals by itself while it is running, and per-application usage is unavailable.
 
