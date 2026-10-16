@@ -1,4 +1,67 @@
 import { useEffect, useState, type ReactNode } from "react";
+import type { IconType } from "react-icons";
+import {
+  LuAppWindow,
+  LuBrain,
+  LuCloud,
+  LuCircleCheck,
+  LuCircleOff,
+  LuCode,
+  LuCog,
+  LuContainer,
+  LuDatabase,
+  LuDownload,
+  LuFilm,
+  LuGamepad2,
+  LuGlobe,
+  LuKeyRound,
+  LuMessageCircle,
+  LuMusic,
+  LuPackage,
+  LuServer,
+  LuShield,
+  LuTerminal,
+  LuTriangleAlert,
+  LuX,
+} from "react-icons/lu";
+import {
+  SiArchlinux,
+  SiBun,
+  SiClaude,
+  SiCloudflare,
+  SiCmake,
+  SiCounterstrike,
+  SiCurl,
+  SiDocker,
+  SiFfmpeg,
+  SiFlatpak,
+  SiGit,
+  SiGithub,
+  SiGo,
+  SiGooglegemini,
+  SiGunicorn,
+  SiHuggingface,
+  SiImmich,
+  SiJellyfin,
+  SiNodedotjs,
+  SiNpm,
+  SiOllama,
+  SiOpenai,
+  SiPnpm,
+  SiPostgresql,
+  SiProtonvpn,
+  SiPython,
+  SiRedis,
+  SiRockstargames,
+  SiRust,
+  SiSpotify,
+  SiSteam,
+  SiTailscale,
+  SiUv,
+  SiWine,
+  SiYarn,
+  SiYoutube,
+} from "react-icons/si";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
@@ -51,6 +114,8 @@ type Status = {
 };
 
 type AppTraffic = { app: string; rx_bytes: number; tx_bytes: number };
+
+type LiveApps = { interval_ms: number; sampled_at_utc_ms: number; apps: AppTraffic[] };
 
 type HelperState =
   | {
@@ -298,7 +363,6 @@ const ICONS: Record<string, string> = {
   back: "M9.5 3.5L5 8l4.5 4.5",
   calendar: "M2.5 4.5h11M2.5 2.5v11h11v-11zM5 1.5v2M11 1.5v2",
   download_file: "M8 2.5v7.5M5.5 7.5l2.5 2.5 2.5-2.5M3 13.5h10",
-  close: "M4.5 4.5l7 7M11.5 4.5l-7 7",
 };
 
 const CIRCLES: Record<string, [number, number, number][]> = {
@@ -326,6 +390,13 @@ const RECTS: Record<string, [number, number, number, number, number][]> = {
   ],
   virtual: [[2.4, 2.4, 11.2, 11.2, 2]],
 };
+
+const STATUS_GLYPHS = { ok: LuCircleCheck, warn: LuTriangleAlert, off: LuCircleOff };
+
+function StatusGlyph({ state }: { state: keyof typeof STATUS_GLYPHS }) {
+  const Glyph = STATUS_GLYPHS[state];
+  return <Glyph className={`status-glyph ${state}`} size={14} aria-hidden="true" />;
+}
 
 function Icon({ name, className }: { name: string; className?: string }) {
   return (
@@ -461,20 +532,88 @@ function ProcessIcon({
     );
   }
 
-  // Nothing on disk: most of these are CLI tools and daemons that ship no icon.
-  // A per-name letter chip keeps the rows distinguishable at a glance.
-  const letter = (name.match(/[a-z0-9]/i)?.[0] ?? "?").toUpperCase();
-  let hash = 0;
-  for (let i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) | 0;
-
+  const Glyph = categoryIcon(name);
   return (
-    <span
-      className={`process-icon letter ${className ?? ""}`}
-      style={{ width: size, height: size, fontSize: Math.round(size * 0.62), ["--chip-hue" as string]: Math.abs(hash) % 360 }}
+    <Glyph
+      size={size}
+      className={`process-icon glyph ${className ?? ""}`}
       aria-hidden="true"
-    >
-      {letter}
-    </span>
+    />
+  );
+}
+
+// Nothing on disk: most of these are CLI tools and daemons that ship no icon.
+// Shown by what they are rather than who they are, as hw-monitor does. First
+// match wins, so the narrow categories come before the broad ones: a Proton
+// game's exe path before the VPN rule that would match "proton".
+const CATEGORY_ICONS: [RegExp, IconType][] = [
+  // Proton games: an exe, a drive path, or a comm cut off mid-".exe".
+  [/\.(e|ex|exe)?$|^[a-z]:\\|steamapps|^steam|^(cs2|proton|gamescope)$|^wine|minecraft|ultimmc|prismlauncher|lutris|heroic|gamethread/, LuGamepad2],
+  [/cloudflared|tailscale|wireguard|wg-quick|openvpn|vpn|tunnel/, LuShield],
+  [/^ssh|sshd/, LuKeyRound],
+  [/dropbox|nextcloud|owncloud|onedrive|rclone|syncthing|insync|local file sync/, LuCloud],
+  [/^(pacman|yay|paru|pamac|makepkg|apt|apt-get|dnf|zypper|flatpak|snapd?|packagekitd|pip|pipx|uv|npm|pnpm|yarn|cargo|rustup|go)( |$)/, LuPackage],
+  [/curl|wget|aria2|yt-dlp|youtube-dl|spotdl|deemix|torrent|transmission|deluge|download/, LuDownload],
+  [/^(hf|hf-xet|huggingface|ollama|vllm|llama|claude|codex|gemini|agy|opencode|open-webui|copilot|finetune|train)/, LuBrain],
+  [/postgres|mysql|mariadb|redis|valkey|mongo|sqlite/, LuDatabase],
+  [/spotify|spotiflac|tidal|deezer|navidrome|lidarr|feishin|^ytm$|mpd|rhythmbox|music/, LuMusic],
+  [/jellyfin|plex|emby|kodi|stremio|^mpv$|vlc|^obs$|ffmpeg|immich/, LuFilm],
+  [/discord|vesktop|telegram|signal|slack|element|teams|zoom|whatsapp|thunderbird|mail/, LuMessageCircle],
+  [/firefox|chrom|crbrowser|brave|vivaldi|opera|librewolf|epiphany|webkit/, LuGlobe],
+  [/docker|containerd|podman|kube/, LuContainer],
+  [/server|uvicorn|gunicorn|granian|nginx|httpd|caddy|playit/, LuServer],
+  [/^(code|cursor|zed|n?vim|gh|git|bzr|cmake|pytest|godot)$|^git-|python|node|deno|^bun|java|ruby|php|next-|create-next-app|eclipse/, LuCode],
+  [/^(bash|sh|zsh|fish|dash|tmux|screen|sudo|ttyd)$|term|kitty|alacritty|foot|wezterm|konsole/, LuTerminal],
+  [/^systemd|daemon|networkmanager|dbus|avahi|cups|chrony|ntp|dns res|^dig$|getent|dirmngr|pingsender|appstream/, LuCog],
+];
+
+// Who they are, when the logo is unambiguous: Simple Icons, tried before the
+// categories above.
+const BRAND_ICONS: [RegExp, IconType][] = [
+  [/^cloudflared$/, SiCloudflare],
+  [/^tailscaled?$/, SiTailscale],
+  [/^protonvpn/, SiProtonvpn],
+  [/^curl$/, SiCurl],
+  [/^docker/, SiDocker],
+  [/^gh$/, SiGithub],
+  [/^git(-|$)/, SiGit],
+  [/^(python\d*(\.\d+)?|pip\d*)$/, SiPython],
+  [/^uvx?$/, SiUv],
+  [/^go$/, SiGo],
+  [/^npm( |$)/, SiNpm],
+  [/^pnpm( |$)/, SiPnpm],
+  [/^yarn( |$)/, SiYarn],
+  [/^bun( |$)/, SiBun],
+  [/^node$/, SiNodedotjs],
+  [/^(cargo|rustup)$/, SiRust],
+  [/^postgres/, SiPostgresql],
+  [/^redis/, SiRedis],
+  [/^jellyfin/, SiJellyfin],
+  [/^immich/, SiImmich],
+  [/^ffmpeg$/, SiFfmpeg],
+  [/^claude$/, SiClaude],
+  [/^codex$/, SiOpenai],
+  [/^gemini$/, SiGooglegemini],
+  [/^ollama$/, SiOllama],
+  [/^(hf|hf-xet.*|huggingface.*)$/, SiHuggingface],
+  [/^(pacman|yay|paru|makepkg)$/, SiArchlinux],
+  [/^flatpak/, SiFlatpak],
+  [/^cmake$/, SiCmake],
+  [/^gunicorn/, SiGunicorn],
+  [/^cs2$/, SiCounterstrike],
+  [/rockstar games/, SiRockstargames],
+  [/^(yt-dlp|youtube-dl)$/, SiYoutube],
+  [/^spotdl$/, SiSpotify],
+  [/^steam(webhelper|errorrepor)/, SiSteam],
+  [/^wine/, SiWine],
+];
+
+function categoryIcon(name: string): IconType {
+  const n = name.toLowerCase();
+  return (
+    BRAND_ICONS.find(([re]) => re.test(n))?.[1] ??
+    CATEGORY_ICONS.find(([re]) => re.test(n))?.[1] ??
+    LuAppWindow
   );
 }
 
@@ -541,6 +680,11 @@ function SortHeader({
 
 /* ---------------------------------------------------------------- charts -- */
 
+// A centred tooltip on an edge column runs off the window, so the outer thirds
+// anchor theirs to the column's edge and grow inward.
+const tipSide = (n: number, count: number) =>
+  n < count / 3 ? " tip-start" : n >= (2 * count) / 3 ? " tip-end" : "";
+
 function UsageChart({
   series,
   canDrill,
@@ -605,7 +749,7 @@ function UsageChart({
             return (
               <div
                 key={c.key}
-                className={`col${c.unknown ? " blank" : ""}${isClickable ? " clickable" : ""}`}
+                className={`col${c.unknown ? " blank" : ""}${isClickable ? " clickable" : ""}${tipSide(n, cols.length)}`}
                 tabIndex={isClickable ? 0 : undefined}
                 role={isClickable ? "button" : undefined}
                 aria-label={isClickable ? `Inspect ${c.label}` : undefined}
@@ -629,8 +773,10 @@ function UsageChart({
                 }}
               >
                 <div className="stack">
-                  <i className="s-tx" style={{ height: `${(100 * c.tx) / peak}%` }} />
-                  <i className="s-rx" style={{ height: `${(100 * c.rx) / peak}%` }} />
+                  <div className="bar" style={{ height: `${(100 * (c.rx + c.tx)) / peak}%` }}>
+                    <i className="s-tx" style={{ flexGrow: c.tx }} />
+                    <i className="s-rx" style={{ flexGrow: c.rx }} />
+                  </div>
                 </div>
                 <span className="col-tick">{n % every === 0 ? c.tick : ""}</span>
               </div>
@@ -658,7 +804,6 @@ function LiveSpeedChart({ history }: { history: { rx: number; tx: number }[] }) 
 
   const peak = Math.max(1024, ...padded.map((p) => Math.max(p.rx, p.tx)));
   const width = 600;
-  const height = 120;
   const plotH = 104;
 
   const getX = (i: number) => (i / (MAX - 1)) * width;
@@ -680,8 +825,6 @@ function LiveSpeedChart({ history }: { history: { rx: number; tx: number }[] }) 
       <div className="live-chart-header">
         <div className="live-chart-peak">
           <span>Peak: {perSec(peak)}</span>
-          <span className="live-chart-scale-mid">{perSec(peak / 2)}</span>
-          <span>0 B/s</span>
         </div>
         <div className="live-chart-legend">
           <span className="legend-item rx">
@@ -694,7 +837,7 @@ function LiveSpeedChart({ history }: { history: { rx: number; tx: number }[] }) 
       </div>
       <div className="live-chart-svg-wrap">
         <svg
-          viewBox={`0 0 ${width} ${height}`}
+          viewBox={`0 0 ${width} ${plotH}`}
           preserveAspectRatio="none"
           className="live-chart-svg"
           aria-hidden="true"
@@ -719,10 +862,13 @@ function LiveSpeedChart({ history }: { history: { rx: number; tx: number }[] }) 
           <path d={rxLine} fill="none" stroke="var(--rx)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
           <path d={txLine} fill="none" stroke="var(--tx)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
 
-          <text x="4" y={height - 3} fill="var(--text-3)" fontSize="10" fontFamily="inherit">60s ago</text>
-          <text x={width / 2} y={height - 3} fill="var(--text-3)" fontSize="10" textAnchor="middle" fontFamily="inherit">30s ago</text>
-          <text x={width - 4} y={height - 3} fill="var(--text-3)" fontSize="10" textAnchor="end" fontFamily="inherit">Now</text>
         </svg>
+      </div>
+      {/* Outside the SVG: it stretches to its card, and text inside would too. */}
+      <div className="live-chart-axis" aria-hidden="true">
+        <span>60s ago</span>
+        <span>30s ago</span>
+        <span>Now</span>
       </div>
     </div>
   );
@@ -768,8 +914,9 @@ function AppTimelineChart({
             <span className="strong">Total: {bytes(totalRx + totalTx)}</span>
           </span>
         </div>
-        <button className="btn" onClick={onClose} aria-label="Close app detail">
-          <Icon name="close" /> Close
+        <button className="btn btn-icon" onClick={onClose} aria-label="Close app detail">
+          <LuX size={16} aria-hidden="true" />
+          <span>Close</span>
         </button>
       </div>
 
@@ -789,12 +936,14 @@ function AppTimelineChart({
             {cols.map((c, n) => (
               <div
                 key={c.key}
-                className="col"
+                className={`col${tipSide(n, cols.length)}`}
                 data-tip={`${c.label} · ↓ ${bytes(c.rx)} · ↑ ${bytes(c.tx)}`}
               >
                 <div className="stack">
-                  <i className="s-tx" style={{ height: `${(100 * c.tx) / peak}%` }} />
-                  <i className="s-rx" style={{ height: `${(100 * c.rx) / peak}%` }} />
+                  <div className="bar" style={{ height: `${(100 * (c.rx + c.tx)) / peak}%` }}>
+                    <i className="s-tx" style={{ flexGrow: c.tx }} />
+                    <i className="s-rx" style={{ flexGrow: c.rx }} />
+                  </div>
                 </div>
                 <span className="col-tick">{n % every === 0 ? c.tick : ""}</span>
               </div>
@@ -885,6 +1034,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [helper, setHelper] = useState<HelperState | null>(null);
   const [apps, setApps] = useState<AppUsage | null>(null);
+  const [liveApps, setLiveApps] = useState<LiveApps | null>(null);
   const [selectedApp, setSelectedApp] = useState<string | null>(null);
   const [range, setRange] = useState<Range>(() => ranges()[0]);
   const [drillStack, setDrillStack] = useState<Range[]>([]);
@@ -907,6 +1057,7 @@ export default function App() {
   const [quota, setQuota] = useState<QuotaWarning | null>(null);
   const [installing, setInstalling] = useState(false);
   const [page, setPage] = useState<Page>("overview");
+  const [theme, setTheme] = useState(() => document.documentElement.dataset.theme ?? "system");
   const [appQuery, setAppQuery] = useState("");
   const [appSort, setAppSort] = useState<{ key: SortKey; dir: "asc" | "desc" } | null>(null);
 
@@ -1003,6 +1154,16 @@ export default function App() {
     };
   }, []);
 
+  // The helper samples every few seconds; polling faster only re-reads the
+  // same tick. Only while the overview is on screen.
+  useEffect(() => {
+    if (page !== "overview") return;
+    const load = () => invoke<LiveApps | null>("get_live_apps").then(setLiveApps).catch(() => {});
+    load();
+    const timer = setInterval(load, 2000);
+    return () => clearInterval(timer);
+  }, [page]);
+
   useEffect(() => {
     let live = true;
     const load = () => {
@@ -1097,9 +1258,10 @@ export default function App() {
     apply({ ...config, sampling_interval_seconds: seconds });
   }
 
-  // What the helper accounts for: applications plus the protocol overhead it
-  // measured. Anything the interfaces moved beyond that is time it was not
-  // watching.
+  // What the helper accounts for: this user's and system services'
+  // applications plus the protocol overhead it measured. Anything the
+  // interfaces moved beyond that belongs to other human users, whose rows the
+  // helper withholds, or to time it was not watching.
   const accounted = apps ? sumTraffic(apps.total, [apps.overhead]).total_bytes : 0;
   const interfacesToday = today
     ? today.total.included.rx_bytes + today.total.included.tx_bytes
@@ -1134,11 +1296,7 @@ export default function App() {
     );
   }
   const appPeak = Math.max(1, ...(apps?.total ?? []).map((a) => a.rx_bytes + a.tx_bytes));
-  // Overhead is kept per day, so an hourly range has none to show and the row
-  // would read a flat zero rather than nothing. Today's shortfall is already
-  // named by the unattributed banner above the table.
-  const gran = isCustomApps ? customAppsGran : appRange.granularity;
-  const showOverhead = gran !== "hour" && "protocol overhead".includes(q);
+  const showOverhead = "protocol overhead".includes(q);
   // Totals what the table is showing, overhead included only when its row is,
   // so a filter narrows the sum instead of contradicting it.
   const appTotal = sumTraffic(appRows, showOverhead && apps ? [apps.overhead] : []);
@@ -1176,10 +1334,7 @@ export default function App() {
         <div className="brand">
           <div className="brand-name">NetMeter</div>
           <div className="brand-status" data-tip={status?.degraded_reason ?? undefined}>
-            <span
-              className={`dot ${running ? "ok" : degraded ? "warn" : "off"}`}
-              aria-hidden="true"
-            />
+            <StatusGlyph state={running ? "ok" : degraded ? "warn" : "off"} />
             <span className="brand-status-text">{statusText}</span>
           </div>
         </div>
@@ -1221,60 +1376,109 @@ export default function App() {
                   </span>
                 </span>
                 <span className="row-value">
-                  <span
-                    className={`dot ${running ? "ok" : degraded ? "warn" : "off"}`}
-                    aria-hidden="true"
-                  />
+                  <StatusGlyph state={running ? "ok" : degraded ? "warn" : "off"} />
                   {statusText}
                 </span>
               </div>
             </div>
 
-            <h2>Last 30 days</h2>
-            <div className="card">
-              <Meter
-                label="Download"
-                dir="down"
-                value={bytes(last30Days?.total.included.rx_bytes ?? 0)}
-              />
-              <Meter
-                label="Upload"
-                dir="up"
-                value={bytes(last30Days?.total.included.tx_bytes ?? 0)}
-              />
-              <Meter
-                label="Total"
-                dir="total"
-                value={bytes(
-                  (last30Days?.total.included.rx_bytes ?? 0) +
-                    (last30Days?.total.included.tx_bytes ?? 0),
-                )}
-              />
+            <div className="grid three">
+              <section>
+                <h2>Last 30 days</h2>
+                <div className="card">
+                  <Meter
+                    label="Download"
+                    dir="down"
+                    value={bytes(last30Days?.total.included.rx_bytes ?? 0)}
+                  />
+                  <Meter
+                    label="Upload"
+                    dir="up"
+                    value={bytes(last30Days?.total.included.tx_bytes ?? 0)}
+                  />
+                  <Meter
+                    label="Total"
+                    dir="total"
+                    value={bytes(
+                      (last30Days?.total.included.rx_bytes ?? 0) +
+                        (last30Days?.total.included.tx_bytes ?? 0),
+                    )}
+                  />
+                </div>
+              </section>
+              <section>
+                <h2>Today</h2>
+                <div className="card">
+                  <Meter label="Download" dir="down" value={bytes(today?.total.included.rx_bytes ?? 0)} />
+                  <Meter label="Upload" dir="up" value={bytes(today?.total.included.tx_bytes ?? 0)} />
+                  <Meter
+                    label="Total"
+                    dir="total"
+                    value={bytes(
+                      (today?.total.included.rx_bytes ?? 0) + (today?.total.included.tx_bytes ?? 0),
+                    )}
+                  />
+                </div>
+              </section>
+              <section>
+                <h2>Current speed</h2>
+                <div className="card">
+                  <Meter label="Download" dir="down" value={perSec(live?.total.rx_bytes_per_sec ?? null)} />
+                  <Meter label="Upload" dir="up" value={perSec(live?.total.tx_bytes_per_sec ?? null)} />
+                  <Meter label="Total" dir="total" value={perSec(sumRate(live?.total))} />
+                </div>
+              </section>
             </div>
 
-            <h2>Today</h2>
-            <div className="card">
-              <Meter label="Download" dir="down" value={bytes(today?.total.included.rx_bytes ?? 0)} />
-              <Meter label="Upload" dir="up" value={bytes(today?.total.included.tx_bytes ?? 0)} />
-              <Meter
-                label="Total"
-                dir="total"
-                value={bytes(
-                  (today?.total.included.rx_bytes ?? 0) + (today?.total.included.tx_bytes ?? 0),
-                )}
-              />
-            </div>
+            <div className="grid two">
+              {liveApps && (
+                <section>
+                  <h2>Using the network now</h2>
+                  <div className="card flush">
+                    <table className="tbl">
+                      <thead>
+                        <tr>
+                          <th>Application</th>
+                          <th className="num">Down</th>
+                          <th className="num">Up</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {liveApps.apps.slice(0, 8).map((a) => (
+                          <tr key={a.app}>
+                            <td className="app-cell" title={a.app}>
+                              <span className="share-label">
+                                <ProcessIcon name={a.app} size={16} />
+                                <span className="app-name">{a.app}</span>
+                              </span>
+                            </td>
+                            <td className="num">
+                              {perSec((a.rx_bytes * 1000) / Math.max(1, liveApps.interval_ms))}
+                            </td>
+                            <td className="num">
+                              {perSec((a.tx_bytes * 1000) / Math.max(1, liveApps.interval_ms))}
+                            </td>
+                          </tr>
+                        ))}
+                        {liveApps.apps.length === 0 && (
+                          <tr>
+                            <td colSpan={3} className="placeholder">
+                              No application is using the network.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+              )}
 
-            <h2>Current speed</h2>
-            <div className="card">
-              <Meter label="Download" dir="down" value={perSec(live?.total.rx_bytes_per_sec ?? null)} />
-              <Meter label="Upload" dir="up" value={perSec(live?.total.tx_bytes_per_sec ?? null)} />
-              <Meter label="Total" dir="total" value={perSec(sumRate(live?.total))} />
-            </div>
-
-            <h2>Live bandwidth (last 60s)</h2>
-            <div className="card chart-card">
-              <LiveSpeedChart history={rateHistory} />
+              <section>
+                <h2>Live bandwidth (last 60s)</h2>
+                <div className="card chart-card">
+                  <LiveSpeedChart history={rateHistory} />
+                </div>
+              </section>
             </div>
 
             <h2>Network interfaces</h2>
@@ -1318,9 +1522,40 @@ export default function App() {
         )}
 
         {page === "settings" && (
-          <div className="page">
+          <div className="page narrow">
             <h1>Settings</h1>
             {banners}
+
+            <h2>Appearance</h2>
+            <div className="card">
+              <div className="row">
+                <span className="row-main">
+                  <span className="row-title">Theme</span>
+                  <span className="row-desc">System follows your desktop's light or dark setting.</span>
+                </span>
+                <select
+                  className="select-input"
+                  value={theme}
+                  aria-label="Theme"
+                  onChange={(e) => {
+                    const t = e.target.value;
+                    setTheme(t);
+                    if (t === "system") delete document.documentElement.dataset.theme;
+                    else document.documentElement.dataset.theme = t;
+                    try {
+                      if (t === "system") localStorage.removeItem("theme");
+                      else localStorage.setItem("theme", t);
+                    } catch {
+                      // Not remembered across restarts, but applied now.
+                    }
+                  }}
+                >
+                  <option value="system">System</option>
+                  <option value="light">Light</option>
+                  <option value="dark">Dark</option>
+                </select>
+              </div>
+            </div>
 
             {config && (
               <>
@@ -1424,21 +1659,6 @@ export default function App() {
                   }
                 />
               </label>
-            </div>
-
-            <h2>Background behavior</h2>
-            <div className="card">
-              <div className="row">
-                <span className="row-icon">
-                  <Icon name="info" />
-                </span>
-                <span className="row-main">
-                  <span className="row-title">Keeps running in the tray</span>
-                  <span className="row-desc">
-                    Closing the window keeps counting; Quit from the tray to stop.
-                  </span>
-                </span>
-              </div>
             </div>
           </div>
         )}
@@ -1575,44 +1795,49 @@ export default function App() {
 
             {history ? (
               <>
-                <h2>Total</h2>
-                <div className="card">
-                  <Meter label="Download" dir="down" value={bytes(history.total.included.rx_bytes)} />
-                  <Meter label="Upload" dir="up" value={bytes(history.total.included.tx_bytes)} />
-                  <Meter
-                    label="Total"
-                    dir="total"
-                    value={bytes(
-                      history.total.included.rx_bytes + history.total.included.tx_bytes,
-                    )}
-                  />
-                </div>
-
-                <h2>Usage over time</h2>
-                <div className="card chart-card">
-                  <UsageChart
-                    series={history}
-                    canDrill={range.granularity === "day" || range.granularity === "month"}
-                    onDrillDown={(colKey) => {
-                      if (range.granularity === "day") {
-                        setDrillStack((s) => [...s, range]);
-                        setRange({
-                          label: colKey,
-                          granularity: "hour",
-                          from: colKey,
-                          to: colKey,
-                        });
-                      } else if (range.granularity === "month") {
-                        setDrillStack((s) => [...s, range]);
-                        setRange({
-                          label: colKey,
-                          granularity: "day",
-                          from: colKey,
-                          to: colKey,
-                        });
-                      }
-                    }}
-                  />
+                <div className="grid aside">
+                  <section>
+                    <h2>Total</h2>
+                    <div className="card">
+                      <Meter label="Download" dir="down" value={bytes(history.total.included.rx_bytes)} />
+                      <Meter label="Upload" dir="up" value={bytes(history.total.included.tx_bytes)} />
+                      <Meter
+                        label="Total"
+                        dir="total"
+                        value={bytes(
+                          history.total.included.rx_bytes + history.total.included.tx_bytes,
+                        )}
+                      />
+                    </div>
+                  </section>
+                  <section>
+                    <h2>Usage over time</h2>
+                    <div className="card chart-card">
+                      <UsageChart
+                        series={history}
+                        canDrill={range.granularity === "day" || range.granularity === "month"}
+                        onDrillDown={(colKey) => {
+                          if (range.granularity === "day") {
+                            setDrillStack((s) => [...s, range]);
+                            setRange({
+                              label: colKey,
+                              granularity: "hour",
+                              from: colKey,
+                              to: colKey,
+                            });
+                          } else if (range.granularity === "month") {
+                            setDrillStack((s) => [...s, range]);
+                            setRange({
+                              label: colKey,
+                              granularity: "day",
+                              from: colKey,
+                              to: colKey,
+                            });
+                          }
+                        }}
+                      />
+                    </div>
+                  </section>
                 </div>
 
                 {/* Real bytes the kernel counted while nothing was watching.
@@ -1778,8 +2003,8 @@ export default function App() {
                 reported. */}
             {appRange.label === "Today" && unattributedToday > 1 << 20 && (
               <Banner tone="info">
-                {bytes(unattributedToday)} today is not attributed below: the helper was not
-                running for part of the day.
+                {bytes(unattributedToday)} today is not attributed below: other users'
+                applications, which are not shown to you, or time the helper was not running.
               </Banner>
             )}
 
@@ -1800,6 +2025,17 @@ export default function App() {
 
             {apps && (
               <>
+                {apps.total.length > 0 && (
+                  <div className="apps-summary">
+                    <span className="apps-summary-total num">{bytes(appTotal.total_bytes)}</span>
+                    <span className="apps-summary-detail num">
+                      {isCustomApps ? `${customAppsFrom} to ${customAppsTo}` : appRange.label}:
+                      Down {bytes(appTotal.rx_bytes)}, Up {bytes(appTotal.tx_bytes)}
+                      {q && `, ${appRows.length} shown`}
+                    </span>
+                  </div>
+                )}
+
                 <div className="toolbar">
                   <span className="search">
                     <Icon name="search" className="search-icon" />
@@ -1818,7 +2054,7 @@ export default function App() {
                 </div>
 
                 <div className="card flush">
-                  <table className="tbl">
+                  <table className="tbl apps-table">
                     <thead>
                       <tr>
                         <SortHeader label="Application" col="app" sort={appSort} onSort={sortBy} />
@@ -1842,7 +2078,7 @@ export default function App() {
                             }
                           }}
                         >
-                          <td>
+                          <td className="app-cell" title={a.app}>
                             <span
                               className="share"
                               style={{
@@ -1892,21 +2128,9 @@ export default function App() {
                           </td>
                         </tr>
                       )}
-                      {apps.total.length > 0 && (
-                        <tr className="total-row">
-                          <td>
-                            Total
-                            {q && <span className="dim"> · {appRows.length} shown</span>}
-                          </td>
-                          <td className="num">{bytes(appTotal.rx_bytes)}</td>
-                          <td className="num">{bytes(appTotal.tx_bytes)}</td>
-                          <td className="num strong">{bytes(appTotal.total_bytes)}</td>
-                        </tr>
-                      )}
                     </tfoot>
                   </table>
                 </div>
-                <p className="hint">Tip: Click an application row to view its timeline.</p>
               </>
             )}
 

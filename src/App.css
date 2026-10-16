@@ -1,74 +1,48 @@
-/* Fluent / Windows 11 surface tokens. Light is the base; dark redefines only
-   the values, so every colour has exactly one definition per theme. */
+/* Fluent / Windows 11 surface tokens, each as light-dark(light, dark). Which
+   half applies is decided by color-scheme alone: the system's preference by
+   default, or the user's choice from Settings via data-theme. */
 :root {
-  --bg: #f3f3f3;
-  --sidebar: #eeeeee;
-  --layer: #ffffff;
-  --layer-hover: #f7f7f7;
-  --layer-press: #f0f0f0;
-  --stroke: #e5e5e5;
-  --stroke-strong: #d2d2d2;
-  --control: #fbfbfb;
-  --control-stroke: #d6d6d6;
-  --control-bottom: #909090;
-  --text: #1b1b1b;
-  --text-2: #5d5d5d;
-  --text-3: #8b8b8b;
-  --accent: #005fb8;
-  --accent-hover: #1a6fc0;
-  --accent-press: #2a72bd;
-  --accent-fg: #ffffff;
-  --accent-soft: rgba(0, 95, 184, 0.08);
-  --rx: #0f6cbd;
-  --tx: #107c41;
-  --ok: #0f7b0f;
-  --warn: #9d5d00;
-  --warn-bg: #fff4ce;
-  --warn-stroke: #f2e2b0;
-  --error: #c42b1c;
-  --error-bg: #fde7e9;
-  --error-stroke: #f5cdd0;
-  --info-bg: #f3f7fc;
-  --info-stroke: #dceaf7;
-  --shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 1px 4px rgba(0, 0, 0, 0.03);
+  --bg: light-dark(#f3f3f3, #202020);
+  --sidebar: light-dark(#eeeeee, #1f1f1f);
+  --layer: light-dark(#ffffff, #2b2b2b);
+  --layer-hover: light-dark(#f7f7f7, #323232);
+  --layer-press: light-dark(#f0f0f0, #2d2d2d);
+  --stroke: light-dark(#e5e5e5, #383838);
+  --stroke-strong: light-dark(#d2d2d2, #454545);
+  --control: light-dark(#fbfbfb, #333333);
+  --control-stroke: light-dark(#d6d6d6, #424242);
+  --control-bottom: light-dark(#909090, #5a5a5a);
+  --text: light-dark(#1b1b1b, #f2f2f2);
+  --text-2: light-dark(#5d5d5d, #c8c8c8);
+  --text-3: light-dark(#8b8b8b, #9b9b9b);
+  --accent: light-dark(#005fb8, #4cc2ff);
+  --accent-hover: light-dark(#1a6fc0, #59c8ff);
+  --accent-press: light-dark(#2a72bd, #42a1d2);
+  --accent-fg: light-dark(#ffffff, #001b2b);
+  --accent-soft: light-dark(rgba(0, 95, 184, 0.08), rgba(76, 194, 255, 0.1));
+  --rx: light-dark(#0f6cbd, #62b0e8);
+  --tx: light-dark(#107c41, #6ccb5f);
+  --ok: light-dark(#0f7b0f, #6ccb5f);
+  --warn: light-dark(#9d5d00, #fce100);
+  --warn-bg: light-dark(#fff4ce, #433519);
+  --warn-stroke: light-dark(#f2e2b0, #5a4a1f);
+  --error: light-dark(#c42b1c, #ff99a4);
+  --error-bg: light-dark(#fde7e9, #442726);
+  --error-stroke: light-dark(#f5cdd0, #5c3130);
+  --info-bg: light-dark(#f3f7fc, #2f2f2f);
+  --info-stroke: light-dark(#dceaf7, #3a3a3a);
+  --shadow: 0 1px 2px light-dark(rgba(0, 0, 0, 0.04), rgba(0, 0, 0, 0.3)),
+    0 1px 4px light-dark(rgba(0, 0, 0, 0.03), rgba(0, 0, 0, 0.2));
   --radius: 7px;
+  color-scheme: light dark;
+}
+
+:root[data-theme="light"] {
   color-scheme: light;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #202020;
-    --sidebar: #1f1f1f;
-    --layer: #2b2b2b;
-    --layer-hover: #323232;
-    --layer-press: #2d2d2d;
-    --stroke: #383838;
-    --stroke-strong: #454545;
-    --control: #333333;
-    --control-stroke: #424242;
-    --control-bottom: #5a5a5a;
-    --text: #f2f2f2;
-    --text-2: #c8c8c8;
-    --text-3: #9b9b9b;
-    --accent: #4cc2ff;
-    --accent-hover: #59c8ff;
-    --accent-press: #42a1d2;
-    --accent-fg: #001b2b;
-    --accent-soft: rgba(76, 194, 255, 0.1);
-    --rx: #62b0e8;
-    --tx: #6ccb5f;
-    --ok: #6ccb5f;
-    --warn: #fce100;
-    --warn-bg: #433519;
-    --warn-stroke: #5a4a1f;
-    --error: #ff99a4;
-    --error-bg: #442726;
-    --error-stroke: #5c3130;
-    --info-bg: #2f2f2f;
-    --info-stroke: #3a3a3a;
-    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 1px 4px rgba(0, 0, 0, 0.2);
-    color-scheme: dark;
-  }
+:root[data-theme="dark"] {
+  color-scheme: dark;
 }
 
 * {
@@ -139,21 +113,17 @@ body {
   white-space: nowrap;
 }
 
-.dot {
+.status-glyph {
   flex: none;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--text-3);
+  color: var(--text-3);
 }
 
-.dot.ok {
-  background: var(--ok);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 18%, transparent);
+.status-glyph.ok {
+  color: var(--ok);
 }
 
-.dot.warn {
-  background: var(--warn);
+.status-glyph.warn {
+  color: var(--warn);
 }
 
 .nav {
@@ -233,9 +203,59 @@ body {
   overflow-y: auto;
 }
 
+/* Grows with the window up to a reading limit, then centres, so a maximised
+   window has even margins instead of one empty half. */
 .page {
-  max-width: 860px;
+  max-width: 1440px;
+  margin-inline: auto;
   padding: 24px 32px 48px;
+}
+
+/* Forms read badly at full width. The page keeps the shared frame so the
+   title does not jump between pages; only its content stays narrow. */
+.page.narrow > * {
+  max-width: 860px;
+}
+
+/* Cards that are short lists sit side by side once there is room, and stack
+   when there is not. Each section's card fills the row's height so a row of
+   cards ends on one line. */
+.grid {
+  display: grid;
+  column-gap: 20px;
+}
+
+.grid > section {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.grid > section > .card {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+/* A stretched card hands its spare height to its content rather than leaving
+   a band of nothing under it: list rows share it, the live chart grows. */
+.grid > section > .card > .row,
+.grid > section > .card > .live-chart-container {
+  flex: 1;
+}
+
+.grid.three {
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+.grid.two {
+  grid-template-columns: repeat(auto-fit, minmax(min(460px, 100%), 1fr));
+}
+
+@media (min-width: 1100px) {
+  .grid.aside {
+    grid-template-columns: minmax(240px, 1fr) 3fr;
+  }
 }
 
 h1 {
@@ -467,12 +487,6 @@ code {
   font-size: 13px;
 }
 
-.tbl tfoot tr.total-row td {
-  font-weight: 600;
-  color: var(--text);
-  background: color-mix(in srgb, var(--text) 5%, transparent);
-}
-
 .tbl td.placeholder {
   padding: 18px 16px;
   text-align: center;
@@ -548,6 +562,43 @@ th.num .sorter {
   vertical-align: middle;
 }
 
+/* max-width: 0 lets the name column take only the space the numbers leave,
+   so an unbreakable name (a Windows exe path under Proton) truncates instead
+   of pushing the table past its card. */
+.tbl td.app-cell {
+  width: 100%;
+  max-width: 0;
+}
+
+.tbl td.app-cell .share-label {
+  display: flex;
+  min-width: 0;
+}
+
+.tbl td.app-cell .app-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.apps-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0 0 14px;
+}
+
+.apps-summary-total {
+  font-size: 28px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.apps-summary-detail {
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+
 .process-icon {
   width: 16px;
   height: 16px;
@@ -563,21 +614,10 @@ th.num .sorter {
   opacity: 0.75;
 }
 
-.process-icon.letter {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-weight: 700;
-  line-height: 1;
-  background: hsl(var(--chip-hue) 45% 88%);
-  color: hsl(var(--chip-hue) 55% 28%);
-}
-
-@media (prefers-color-scheme: dark) {
-  .process-icon.letter {
-    background: hsl(var(--chip-hue) 32% 26%);
-    color: hsl(var(--chip-hue) 55% 82%);
-  }
+/* A category glyph for apps with no icon of their own: secondary ink, so a
+   real icon beside it still reads as the more specific of the two. */
+.process-icon.glyph {
+  color: var(--text-2);
 }
 
 /* ------------------------------------------------------------- banners -- */
@@ -957,7 +997,10 @@ th.num .sorter {
   text-align: center;
 }
 
+/* Bars and the scale beside them read one height, so the scale's "0" stays
+   on the bars' baseline at every size. */
 .chart {
+  --plot-h: 156px;
   display: grid;
   grid-template-columns: auto 1fr;
   grid-template-areas:
@@ -966,31 +1009,43 @@ th.num .sorter {
   gap: 0 10px;
 }
 
+/* The labels share one grid cell the height of the bar area, each centred
+   on its gridline (top, middle, baseline); the column is as wide as the
+   widest label. */
 .chart-scale {
   grid-area: scale;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  height: 156px;
-  padding-bottom: 22px;
+  display: grid;
+  height: calc(var(--plot-h) - 22px);
   font-size: 11px;
+  line-height: 1;
   color: var(--text-3);
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
 
-.chart-scale span:nth-child(2) {
+.chart-scale span {
+  grid-area: 1 / 1;
+}
+
+.chart-scale span:first-child {
+  align-self: start;
   transform: translateY(-50%);
 }
 
+.chart-scale span:nth-child(2) {
+  align-self: center;
+}
+
 .chart-scale span:last-child {
-  transform: translateY(-100%);
+  align-self: end;
+  transform: translateY(50%);
 }
 
 .chart-plot {
   grid-area: plot;
   position: relative;
   min-width: 0;
+  container-type: inline-size;
 }
 
 .chart-grid {
@@ -1011,7 +1066,14 @@ th.num .sorter {
   display: flex;
   align-items: flex-end;
   gap: 2px;
-  height: 156px;
+  height: var(--plot-h);
+}
+
+/* A wide chart at phone height reads as a strip. */
+@media (min-width: 1600px) {
+  .chart {
+    --plot-h: 220px;
+  }
 }
 
 .col {
@@ -1049,14 +1111,22 @@ th.num .sorter {
   padding: 0 1px;
 }
 
-.stack i {
+/* The bar is rounded and clips, so the segments inside stay square and a
+   thin upload slice is exactly as tall as its share, with no cap or notch. */
+.bar {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 3px 3px 0 0;
+}
+
+.bar i {
   display: block;
-  border-radius: 2px 2px 0 0;
+  flex-basis: 0;
 }
 
 .s-rx {
   background: var(--rx);
-  border-radius: 0;
 }
 
 .s-tx {
@@ -1065,6 +1135,13 @@ th.num .sorter {
 
 .col.blank .stack {
   border-bottom: 2px dashed var(--stroke-strong);
+}
+
+/* A narrow chart cannot fit a label under every column: keep every other. */
+@container (max-width: 520px) {
+  .col:nth-child(even) .col-tick {
+    visibility: hidden;
+  }
 }
 
 .col-tick {
@@ -1129,10 +1206,6 @@ th.num .sorter {
   color: var(--text-3);
 }
 
-.live-chart-scale-mid {
-  color: var(--text-3);
-}
-
 .live-chart-legend {
   display: flex;
   gap: 14px;
@@ -1156,8 +1229,9 @@ th.num .sorter {
 }
 
 .live-chart-svg-wrap {
+  flex: 1;
   width: 100%;
-  height: 120px;
+  min-height: 120px;
   background: color-mix(in srgb, var(--control) 40%, transparent);
   border: 1px solid var(--stroke);
   border-radius: 6px;
@@ -1168,6 +1242,19 @@ th.num .sorter {
   width: 100%;
   height: 100%;
   display: block;
+}
+
+/* The SVG is drawn unscaled-aspect, so strokes would thicken with it. */
+.live-chart-svg * {
+  vector-effect: non-scaling-stroke;
+}
+
+.live-chart-axis {
+  display: flex;
+  justify-content: space-between;
+  margin-top: -4px;
+  font-size: 10.5px;
+  color: var(--text-3);
 }
 
 /* ---------------------------------------------------- app-timeline detail -- */
@@ -1259,13 +1346,25 @@ th.num .sorter {
   white-space: nowrap;
   transform: translateX(-50%);
   pointer-events: none;
-  animation: tip 90ms ease-out both;
-  animation-delay: 400ms;
+  /* Hidden for the hover delay, then shown in one step. A fade composites
+     the text and re-rasterizes it when it ends, which jitters in WebKitGTK. */
+  animation: tip 400ms steps(1, end) both;
+}
+
+.tip-start:hover::before {
+  left: 0;
+  transform: none;
+}
+
+.tip-end:hover::before {
+  left: auto;
+  right: 0;
+  transform: none;
 }
 
 @keyframes tip {
   from {
-    opacity: 0;
+    visibility: hidden;
   }
 }
 
@@ -1308,6 +1407,15 @@ th.num .sorter {
   .tbl td {
     padding-left: 10px;
     padding-right: 10px;
+  }
+
+  /* Down and Up do not fit beside a name on a phone; the summary above the
+     table still gives both. */
+  .apps-table th:nth-child(2),
+  .apps-table td:nth-child(2),
+  .apps-table th:nth-child(3),
+  .apps-table td:nth-child(3) {
+    display: none;
   }
 
   .row {

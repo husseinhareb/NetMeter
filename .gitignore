@@ -40,3 +40,6 @@ dist-ssr
 /probe
 /packaging/*.tar.gz
 /packaging/release-notes-*.md
+
+# npm run screenshots
+/screenshots
