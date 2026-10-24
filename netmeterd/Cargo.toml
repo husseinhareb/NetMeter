@@ -38,4 +38,9 @@ libbpf-cargo = "0.27"
 tempfile = "3"
 
 [profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
 strip = true
+# panic = "abort" is not set: the sampling loop catches a panicking tick and
+# keeps counting, which needs unwinding.

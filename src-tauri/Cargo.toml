@@ -76,7 +76,7 @@ tempfile = "3"
 [profile.release]
 codegen-units = 1
 lto = true
-opt-level = 3
+opt-level = "s"
 strip = true
 # NOTE: `panic = "abort"` is deliberately NOT set. The sampling loop runs each
 # tick under `catch_unwind`, so one bad tick is counted and survived rather than
