@@ -1,6 +1,6 @@
 [package]
 name = "netmeter"
-version = "0.1.0"
+version = "0.1.1"
 description = "Lightweight network usage monitor for Linux"
 authors = ["Hussein Hareb <shtam.hareb12@gmail.com>"]
 edition = "2021"

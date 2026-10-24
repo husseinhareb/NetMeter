@@ -3,7 +3,7 @@
 # Builds a tagged release from GitHub. For a new release: tag and push it,
 # bump pkgver, then `updpkgsums` and `makepkg --printsrcinfo > .SRCINFO`.
 pkgname=netmeter
-pkgver=0.1.0
+pkgver=0.1.1
 pkgrel=1
 pkgdesc="Network usage monitor: interface totals and per-application usage, measured in the kernel"
 arch=('x86_64')
