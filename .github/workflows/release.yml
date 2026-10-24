@@ -1,0 +1,91 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    # Oldest runner still offered: the packages need glibc 2.35 instead of the
+    # newest one a rolling distro would link against.
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libelf-dev \
+            zlib1g-dev \
+            clang \
+            pkg-config \
+            patchelf
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: 1.97.1
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build packages
+        # beforeBundleCommand builds netmeterd, which the .deb and .rpm carry
+        run: npx tauri build --bundles deb,rpm,appimage
+
+      - name: Build tarball
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          d="netmeter-$v-x86_64"
+          install -Dm755 src-tauri/target/release/netmeter "$d/usr/bin/netmeter"
+          install -Dm755 netmeterd/target/release/netmeterd "$d/usr/lib/netmeter/netmeterd"
+          install -Dm755 packaging/install-helper.sh "$d/usr/lib/netmeter/install-helper.sh"
+          install -Dm644 packaging/netmeterd.service "$d/usr/lib/systemd/system/netmeterd.service"
+          install -Dm644 packaging/netmeter.desktop "$d/usr/share/applications/netmeter.desktop"
+          for s in 32 64 128; do
+            install -Dm644 "src-tauri/icons/${s}x${s}.png" "$d/usr/share/icons/hicolor/${s}x${s}/apps/netmeter.png"
+          done
+          install -Dm644 src-tauri/icons/128x128@2x.png "$d/usr/share/icons/hicolor/256x256/apps/netmeter.png"
+          install -Dm644 LICENSE "$d/usr/share/licenses/netmeter/LICENSE"
+          tar czf "$d.tar.gz" "$d"
+
+      - name: Generate SHA-256 checksums
+        run: |
+          mkdir out
+          cp src-tauri/target/release/bundle/deb/*.deb \
+             src-tauri/target/release/bundle/rpm/*.rpm \
+             src-tauri/target/release/bundle/appimage/*.AppImage \
+             netmeter-*-x86_64.tar.gz out/
+          cd out
+          sha256sum * > SHA256SUMS
+
+      - name: Attest release artifacts
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: out/*
+
+      - name: Upload to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # The notes are written by hand and attached with `gh release create`;
+        # this only makes sure a release exists and adds the files to it.
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
+            || gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes ""
+          gh release upload "$GITHUB_REF_NAME" out/* --clobber

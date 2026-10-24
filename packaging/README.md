@@ -45,14 +45,15 @@ of its own.
 
     npm run tauri build
 
-Produces a `.deb` and an `.rpm` under `src-tauri/target/release/bundle/`.
+Produces a `.deb` and an `.rpm` locally under `src-tauri/target/release/bundle/`.
 They carry the GUI only; on Arch use the `PKGBUILD` above.
 
-AppImage is deliberately not a target. Building one on a current Arch host
-fails twice over: linuxdeploy bundles a 2024 `strip` that cannot read the
-`.relr.dyn` sections modern binutils emit, and Tauri's GTK plugin expects
-`/usr/lib/gdk-pixbuf-2.0/2.10.0`, a path gdk-pixbuf 2.44 no longer ships.
-Neither is NetMeter's to fix, and an AppImage linked against a bleeding-edge
-glibc would not run on the older systems AppImages exist to serve. If one is
-ever wanted, build it in a container on an old base image, which is how
-portable AppImages are made anyway.
+Releases are built by `.github/workflows/release.yml` on Ubuntu 22.04 when a
+`v*` tag is pushed, and it also produces an AppImage and a tarball next to the
+`.deb` and `.rpm`. The AppImage carries the GUI only, like the other bundles.
+Building one on a current Arch host fails twice over: linuxdeploy bundles a
+2024 `strip` that cannot read the `.relr.dyn` sections modern binutils emit,
+and Tauri's GTK plugin expects `/usr/lib/gdk-pixbuf-2.0/2.10.0`, a path
+gdk-pixbuf 2.44 no longer ships. Neither is NetMeter's to fix, and an AppImage
+linked against a bleeding-edge glibc would not run on the older systems
+AppImages exist to serve, so leave it to the workflow.
