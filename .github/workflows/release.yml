@@ -4,6 +4,14 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to build and upload to
+        required: true
+
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
   release:
@@ -16,6 +24,8 @@ jobs:
       attestations: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ env.TAG }}
 
       - name: Install system dependencies
         run: |
@@ -30,6 +40,8 @@ jobs:
             clang \
             pkg-config \
             patchelf
+          # clang -target bpf does not search the multiarch include directory
+          sudo ln -s /usr/include/x86_64-linux-gnu/asm /usr/include/asm
 
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -51,7 +63,7 @@ jobs:
 
       - name: Build tarball
         run: |
-          v="${GITHUB_REF_NAME#v}"
+          v="${TAG#v}"
           d="netmeter-$v-x86_64"
           install -Dm755 src-tauri/target/release/netmeter "$d/usr/bin/netmeter"
           install -Dm755 netmeterd/target/release/netmeterd "$d/usr/lib/netmeter/netmeterd"
@@ -86,6 +98,6 @@ jobs:
         # The notes are written by hand and attached with `gh release create`;
         # this only makes sure a release exists and adds the files to it.
         run: |
-          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
-            || gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes ""
-          gh release upload "$GITHUB_REF_NAME" out/* --clobber
+          gh release view "$TAG" >/dev/null 2>&1 \
+            || gh release create "$TAG" --title "$TAG" --notes ""
+          gh release upload "$TAG" out/* --clobber
