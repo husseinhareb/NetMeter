@@ -214,8 +214,11 @@ int BPF_PROG(udpv6_send, struct sock *sk, void *msg, __u64 len, int ret) {
 // that call's running total, not each fragment, so summing it inflates
 // download quadratically. The cost of using tcp_recvmsg instead is the splice
 // receive path, which lands in the unattributed remainder.
-// Read the return value through the tracing helper: receive signatures
-// differ between kernel versions, while the socket stays the first argument.
+//
+// The return value is asked for rather than declared as a trailing argument:
+// these functions have lost `int *addr_len` upstream (Debian's 6.12 has five
+// arguments, 7.2 has four), and a fixed signature reads the wrong slot on one
+// of them. On 6.12 that slot was a pointer, counted as bytes received.
 static __always_inline void account_recv(unsigned long long *ctx, struct sock *sk) {
     __u64 ret = 0;
     if (bpf_get_func_ret(ctx, &ret) == 0)
