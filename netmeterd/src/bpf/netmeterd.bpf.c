@@ -214,21 +214,29 @@ int BPF_PROG(udpv6_send, struct sock *sk, void *msg, __u64 len, int ret) {
 // that call's running total, not each fragment, so summing it inflates
 // download quadratically. The cost of using tcp_recvmsg instead is the splice
 // receive path, which lands in the unattributed remainder.
+// Read the return value through the tracing helper: receive signatures
+// differ between kernel versions, while the socket stays the first argument.
+static __always_inline void account_recv(unsigned long long *ctx, struct sock *sk) {
+    __u64 ret = 0;
+    if (bpf_get_func_ret(ctx, &ret) == 0)
+        account(sk, (int)ret, 1);
+}
+
 SEC("fexit/tcp_recvmsg")
-int BPF_PROG(tcp_recv, struct sock *sk, void *msg, __u64 len, int flags, int ret) {
-    account(sk, ret, 1);
+int BPF_PROG(tcp_recv, struct sock *sk) {
+    account_recv(ctx, sk);
     return 0;
 }
 
 SEC("fexit/udp_recvmsg")
-int BPF_PROG(udp_recv, struct sock *sk, void *msg, __u64 len, int flags, int ret) {
-    account(sk, ret, 1);
+int BPF_PROG(udp_recv, struct sock *sk) {
+    account_recv(ctx, sk);
     return 0;
 }
 
 SEC("fexit/udpv6_recvmsg")
-int BPF_PROG(udpv6_recv, struct sock *sk, void *msg, __u64 len, int flags, int ret) {
-    account(sk, ret, 1);
+int BPF_PROG(udpv6_recv, struct sock *sk) {
+    account_recv(ctx, sk);
     return 0;
 }
 
